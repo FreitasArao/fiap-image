@@ -1,11 +1,11 @@
-
-import { PinoLoggerService } from '@core/libs/logging/pino-logger';
-import { beforeEach, describe, expect, it, mock } from 'bun:test';
-import type pino from 'pino';
+import { PinoLoggerService } from '@core/libs/logging/pino-logger'
+import type { Context } from '@opentelemetry/api'
+import { beforeEach, describe, expect, it, mock } from 'bun:test'
+import type pino from 'pino'
 
 describe('PinoLoggerService - Unit', () => {
-  let logger: PinoLoggerService;
-  let mockPino: pino.Logger;
+  let logger: PinoLoggerService
+  let mockPino: pino.Logger
 
   beforeEach(() => {
     mockPino = {
@@ -15,27 +15,27 @@ describe('PinoLoggerService - Unit', () => {
       debug: mock(),
       trace: mock(),
       level: 'info',
-    } as unknown as pino.Logger;
+    } as unknown as pino.Logger
 
     logger = new PinoLoggerService(
       { suppressConsole: false },
-      {} as any,
+      {} as Context,
       mockPino,
       'TestContext',
-    );
-  });
+    )
+  })
 
   it('logs info with context', () => {
-    logger.log('Test');
+    logger.log('Test')
 
     expect(mockPino.info).toHaveBeenCalledWith(
       expect.objectContaining({ context: 'TestContext' }),
       'Test',
-    );
-  });
+    )
+  })
 
   it('includes extra params', () => {
-    logger.log('Test', { userId: 1 });
+    logger.log('Test', { userId: 1 })
 
     expect(mockPino.info).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -43,27 +43,27 @@ describe('PinoLoggerService - Unit', () => {
         extra: { userId: 1 },
       }),
       'Test',
-    );
-  });
+    )
+  })
 
   it('creates new scoped logger with withContext()', () => {
-    const scoped = logger.withContext('NewContext');
+    const scoped = logger.withContext('NewContext')
 
-    expect(scoped).not.toBe(logger);
-    expect(scoped.context).toBe('NewContext');
-    expect(logger.context).toBe('TestContext');
-  });
+    expect(scoped).not.toBe(logger)
+    expect(scoped.context).toBe('NewContext')
+    expect(logger.context).toBe('TestContext')
+  })
 
   it('does not log when suppressConsole=true', () => {
     const suppressed = new PinoLoggerService(
       { suppressConsole: true },
-      {} as any,
+      {} as unknown as Context,
       mockPino,
       'Silent',
-    );
+    )
 
-    suppressed.log('Nope');
+    suppressed.log('Nope')
 
-    expect(mockPino.info).not.toHaveBeenCalled();
-  });
-});
+    expect(mockPino.info).not.toHaveBeenCalled()
+  })
+})

@@ -1,9 +1,8 @@
-import { logger } from "@modules/logging";
-import { VideoProcessorController } from "@modules/video-processor/presentation/video-processor.controller";
-import Elysia from "elysia";
+import { BaseElysia } from '@core/libs/elysia'
+import { VideoProcessorController } from '@modules/video-processor/presentation/video-processor.controller'
 
-export const videoProcessorRoute = new Elysia({
-    prefix: 'video-processor',
-}).post('/', ({ body }) => {
-    return new VideoProcessorController(logger.withContext('video-processor#post')).create()
+export const videoProcessorRoute = BaseElysia.create({
+  prefix: 'video-processor',
+}).post('/', ({ logger }) => {
+  return new VideoProcessorController(logger).create()
 })
