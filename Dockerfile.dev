@@ -1,0 +1,16 @@
+# Base image Bun
+FROM oven/bun:1 AS dev
+WORKDIR /usr/src/app
+
+# Copiar apenas arquivos de dependências primeiro (caching)
+COPY package.json bun.lock ./
+RUN bun install
+
+# Copiar todo o projeto
+COPY . .
+
+# Porta da aplicação
+EXPOSE 3000
+
+# Comando de desenvolvimento (hot reload)
+CMD ["bun",  "dev"]

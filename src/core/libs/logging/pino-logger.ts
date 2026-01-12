@@ -23,7 +23,7 @@ export class PinoLoggerService extends AbstractLoggerService<pino.Level> {
     this.logger =
       loggerInstance ??
       pino({
-        level: process.env.LOG_LEVEL || 'info',
+        level: Bun.env.LOG_LEVEL || 'info',
         serializers: {
           err: pino.stdSerializers.err,
           error: pino.stdSerializers.err,
@@ -99,7 +99,7 @@ export class PinoLoggerService extends AbstractLoggerService<pino.Level> {
   }
 
   private resolveTransport() {
-    if (process.env.NODE_ENV === 'development') {
+    if (Bun.env.NODE_ENV === 'development') {
       return {
         target: 'pino-pretty',
         options: {
