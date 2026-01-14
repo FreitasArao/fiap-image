@@ -8,7 +8,7 @@ Container_Boundary(fiapx, "FIAPX API") {
 
     Component(createURLCtrl, "CreateURLController", "Cria multipart upload")
     Component(presignService, "PresignService", "Gera presigned URLs")
-    Component(videoRepo, "VideoRepository", "Cassandra")
+    Component(videoRepo, "VideoRepository", "scylladb")
 
     Component(processVideoCtrl, "ProcessVideoController", "Recebe eventos de part upload")
     Component(etagHandler, "ETagHandler", "Valida partes")
@@ -37,13 +37,13 @@ Container_Ext(sqsPrint, "SQS Print Video")
 Container_Ext(dlq, "SQS DLQ")
 
 Container_Ext(s3, "AWS S3")
-Container_Ext(cassandra, "Cassandra DB")
+Container_Ext(scylladb, "ScyllaDB DB")
 
 Rel(apiGateway, createURLCtrl, "Routes POST /create-url")
 Rel(createURLCtrl, presignService, "Gera URLs")
 Rel(presignService, s3, "CreateMultipartUpload")
 Rel(createURLCtrl, videoRepo, "Salva video_id")
-Rel(videoRepo, cassandra, "Persistência")
+Rel(videoRepo, scylladb, "Persistência")
 
 note right of presignService
 - Calcula partSize

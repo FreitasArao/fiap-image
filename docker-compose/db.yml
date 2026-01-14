@@ -1,16 +1,16 @@
 services:
-  cassandra:
-    image: cassandra:4.1
-    container_name: cassandra
+  database:
+    image: scylladb/scylla:latest
+    container_name: scylladb
     ports:
       - "9042:9042"
     environment:
-      - CASSANDRA_CLUSTER_NAME=fiap-image
-      - CASSANDRA_DC=dc1
-      - CASSANDRA_RACK=rack1
-      - CASSANDRA_START_RPC=true
+      - SCYLLA_CLUSTER_NAME=fiap-image
+      - SCYLLA_DC=dc1
+      - SCYLLA_RACK=rack1
+      - SCYLLA_START_RPC=true
     volumes:
-      - cassandra-data:/var/lib/cassandra
+      - scylladb-data:/var/lib/scylla
     healthcheck:
       test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
       interval: 10s
@@ -19,4 +19,4 @@ services:
       start_period: 30s
 
 volumes:
-  cassandra-data:
+  scylladb-data:

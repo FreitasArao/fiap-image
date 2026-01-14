@@ -37,11 +37,11 @@ System_Boundary(k8s, "Kubernetes", "Kubernetes system") {
 }
 
 System_Boundary(database, "Database", "Database system") {
-    SystemDb_Ext(cassandraDB, "Cassandra DB", "Armazena status do vídeo")
+    SystemDb_Ext(scylladb, "ScyllaDB DB", "Armazena status do vídeo")
 }
 
 Rel(userInitiate, createURL, "Cria urls pré-assinadas", "HTTP", "POST /create-url")
-Rel(createURL, cassandraDB, "Salva o video_id")
+Rel(createURL, scylladb, "Salva o video_id")
 
 note right of createURL
 - Calcula partSize e partsCount
