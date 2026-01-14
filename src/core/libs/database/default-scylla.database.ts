@@ -1,6 +1,7 @@
 import { Result } from '@core/domain/result'
 import { DatabaseExecutionError } from '@core/errors/database.error'
 import { DataSource } from '@core/libs/database/datasource'
+import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 
 export type InsertEntity<T> = {
   table: string
@@ -14,9 +15,13 @@ export type UpdateEntity<T> = {
 }
 
 export abstract class DefaultDatabase {
-  constructor(protected readonly datasource: DataSource) {}
+  constructor(
+    protected readonly datasource: DataSource,
+    private readonly logger: AbstractLoggerService,
+  ) {}
 
   protected prepareInsert<T>(entity: InsertEntity<T>) {
+    this.logger.log('Preparing insert', { entity })
     const columns = Object.keys(entity.data)
     const values = Object.values(entity.data)
     const placeholders = columns.map(() => '?').join(', ')
@@ -28,6 +33,7 @@ export abstract class DefaultDatabase {
   }
 
   protected prepareUpdate<T>(entity: UpdateEntity<T>) {
+    this.logger.log('Preparing update', { entity })
     const setCols = Object.keys(entity.data)
     const setValues = Object.values(entity.data)
 
@@ -46,6 +52,7 @@ export abstract class DefaultDatabase {
   async insert<T>(
     entity: InsertEntity<T>,
   ): Promise<Result<void, DatabaseExecutionError>> {
+    this.logger.log('Inserting entity', { entity })
     const { query, values } = this.prepareInsert(entity)
     const result = await this.datasource.execute(query, values)
     return result.isSuccess ? Result.ok(undefined) : Result.fail(result.error)
@@ -54,6 +61,7 @@ export abstract class DefaultDatabase {
   async update<T>(
     entity: UpdateEntity<T>,
   ): Promise<Result<void, DatabaseExecutionError>> {
+    this.logger.log('Updating entity', { entity })
     const { query, values } = this.prepareUpdate(entity)
     const result = await this.datasource.execute(query, values)
     return result.isSuccess ? Result.ok(undefined) : Result.fail(result.error)

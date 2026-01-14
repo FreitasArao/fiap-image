@@ -2,13 +2,12 @@ services:
   database:
     image: scylladb/scylla:latest
     container_name: scylladb
+    command: --smp 1 --memory 750M --overprovisioned 1 --developer-mode 1
     ports:
       - "9042:9042"
     environment:
-      - SCYLLA_CLUSTER_NAME=fiap-image
-      - SCYLLA_DC=dc1
-      - SCYLLA_RACK=rack1
-      - SCYLLA_START_RPC=true
+      - CASSANDRA_CONTACT_POINTS=database
+      - CASSANDRA_KEYSPACE=fiap_image
     volumes:
       - scylladb-data:/var/lib/scylla
     healthcheck:
@@ -18,5 +17,40 @@ services:
       retries: 12
       start_period: 30s
 
+  scylla-init:
+    image: scylladb/scylla:latest
+    container_name: scylla-init
+    user: root
+    depends_on:
+      database:
+        condition: service_healthy
+    volumes:
+      - scylla-init-state:/state
+    entrypoint:
+      - bash
+      - -c
+      - |
+        mkdir -p /state && chmod 777 /state
+        if [ ! -f /state/initialized ]; then
+          cqlsh database -e "CREATE KEYSPACE IF NOT EXISTS fiap_image WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}"
+          touch /state/initialized
+        fi
+    restart: "no"
+
+  database-admin:
+    image: ipushc/cassandra-web:latest
+    container_name: scylladb-admin
+    ports:
+      - "8083:8083"
+    environment:
+      - CASSANDRA_HOST=database
+      - CASSANDRA_PORT=9042
+    depends_on:
+      database:
+        condition: service_healthy
+      scylla-init:
+        condition: service_completed_successfully
+
 volumes:
   scylladb-data:
+  scylla-init-state:

@@ -1,3 +1,4 @@
+import { DataSource } from '@core/libs/database/datasource'
 import { BaseElysia } from '@core/libs/elysia'
 import { docs } from '@modules/docs'
 import { logger } from '@modules/logging'
@@ -5,7 +6,17 @@ import { telemetry } from '@modules/telemetry'
 import { videoProcessorRoute } from '@modules/video-processor/index.route'
 // import { connectCassandra } from '@core/libs/database/cassandra'
 
+const datasource = DataSource.getInstance(logger)
+
+const shutdown = async () => {
+  await datasource.disconnect()
+}
+
 const app = BaseElysia.create()
+  .onStart(async () => {
+    await datasource.connect()
+  })
+  .onStop(shutdown)
   .use(telemetry)
   .use(docs)
   .use(videoProcessorRoute)
@@ -19,3 +30,6 @@ app.listen(3010, () => {
     `🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`,
   )
 })
+
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)
