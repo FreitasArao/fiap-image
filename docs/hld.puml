@@ -1,100 +1,102 @@
-@startuml Basic Sample
+@startuml HLD
 !include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+!theme C4_brown from https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/themes
 
-    System_Boundary(frontend, "Frontend", "Frontend system") {
-        Person(userInitiate, "User", "Usuário inicia envio do vídeo")
-        Person(userProcess, "User", "Usuário processa o vídeo")
-    }
+System_Boundary(frontend, "Frontend", "Frontend system") {
+    Person(userInitiate, "User", "Usuário inicia envio do vídeo")
+    Person(userProcess, "User", "Usuário processa o vídeo")
+}
 
-    System_Boundary(fiapx, "FIAPX", "FiapX system") {
-        Container(createURL, "/create-url", "Cria uma URL para o vídeo para processar o video")
-        Container(processVideo, "/{video_id}", "Processa o vídeo", "{chunk_number, etag}")
-        Container(completeMultipartUpload, "/{video_id}", "Finaliza o upload de partes do vídeo")
-    }
+Enterprise_Boundary(fiapx, "FIAPX", "FiapX system") {
+    Container(createURL, "/create-url", "Cria uma URL para o vídeo para processar o video")
+    Container(processVideo, "/{video_id}", "Processa o vídeo", "{chunk_number, etag}")
+    Container(completeMultipartUpload, "/{video_id}", "Finaliza o upload de partes do vídeo")
+}
 
-    System_Boundary(aws, "AWS", "AWS system") {
-        Container(awsS3PreSignedURL, "AWS S3", "Serviço de armazenamento de objetos")
-        Container(awsS3PartUpload, "AWS S3 Part Upload", "Upload de partes do vídeo")
-        Container(awsS3CompleteMultipartUpload, "AWS S3 Complete Multipart Upload", "Evento de finalização do upload de partes do vídeo")
-        Container(awsSQSSplitVideo, "AWS SQS Split Video", "Serviço de divisão do vídeo em partes por tempo do video")
-        Container(awsSQSPrintVideo, "AWS SQS Print Video", "Publica a mensagem na fila de impressão do vídeo")
-        Container(awsSQSDLQ, "AWS SQS DLQ", "Dead Letter Queue para mensagens com falha")
-        Container(awsLambda, "AWS Lambda", "Serviço de função lambda")
-        Container(awsLambdaCompleteMultipartUpload, "AWS Lambda Complete Multipart Upload", "Manipula o evento de finalização do upload de partes do vídeo")
-    }
+System_Boundary(aws, "AWS", "AWS system") {
+    Container_Ext(awsS3PreSignedURL, "AWS S3", "Serviço de armazenamento de objetos")
+    Container_Ext(awsS3PartUpload, "AWS S3 Part Upload", "Upload de partes do vídeo")
+    Container_Ext(awsS3CompleteMultipartUpload, "AWS S3 Complete Multipart Upload", "Evento de finalização do upload")
 
-    System_Boundary(k8s, "Kubernetes", "Kubernetes system") {
-        Container(k8sPodSplitVideo, "Kubernetes Pod Split Video", "Pod de divisão do vídeo em partes por tempo do video")
-        Container(k8sPodPrintVideo, "Kubernetes Pod Print Video", "Pod de impressão do vídeo")
-    }
+    SystemQueue(awsSQSSplitVideo, "AWS SQS Split Video", "Fila para divisão do vídeo")
+    SystemQueue(awsSQSPrintVideo, "AWS SQS Print Video", "Fila para impressão do vídeo")
+    SystemQueue(awsSQSDLQ, "AWS SQS DLQ", "Dead Letter Queue")
 
-    note right of k8s
-    **Otimização de Custo: Spot Instances**
-    - Usar Spot Instances
-    - Redução de custo de compute
-    end note
+    Container_Ext(awsEventBridge, "AWS EventBridge", "Roteamento de eventos")
+    Container_Ext(awsApiDestinationProcess, "API Destination (process)", "POST /process-video/{video_id}")
+    Container_Ext(awsApiDestinationComplete, "API Destination (complete)", "POST /{video_id}")
+}
 
+System_Boundary(k8s, "Kubernetes", "Kubernetes system") {
+    Container_Ext(splitWorker, "Split Worker", "Consome SQS e cria Jobs")
+    Container_Ext(printWorker, "Print Worker", "Consome SQS e cria Jobs")
 
-    System_Boundary(database, "Database", "Database system") {
-        Container(cassandraDB, "Cassandra DB", "Serviço de banco de dados Cassandra")
-    }
+    Container_Ext(k8sJobSplitVideo, "Job Split Video", "Divide vídeo em partes por tempo")
+    Container_Ext(k8sJobPrintVideo, "Job Print Video", "Gera prints do vídeo")
+}
 
-    Rel(userInitiate, createURL, "Cria urls pré-assinadas para o vídeo", "HTTP", "POST", "POST /create-url")
-    Rel(createURL, cassandraDB, "Salva o video_id no Cassandra DB")
+System_Boundary(database, "Database", "Database system") {
+    SystemDb_Ext(cassandraDB, "Cassandra DB", "Armazena status do vídeo")
+}
 
-    note right of createURL
-    - Calcula partSize e partsCount
-    - CreateMultipartUpload (S3)
-    - Gera presigned URLs para cada parte
-    - Retorna videoId + uploadUrls (https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html)
-    end note
+Rel(userInitiate, createURL, "Cria urls pré-assinadas", "HTTP", "POST /create-url")
+Rel(createURL, cassandraDB, "Salva o video_id")
 
-    Rel(userProcess, awsS3PreSignedURL, "Realiza o upload do vídeo direto no S3", "HTTP", "POST", "pre-signed urls")
-    Rel(awsS3PreSignedURL, awsS3PartUpload, "Cada url pré-assinada é usada para upload de uma parte do vídeo")
-    Rel_L(awsS3PartUpload, awsLambda, "Chama a função lambda para multi-part uploaded")
+note right of createURL
+- Calcula partSize e partsCount
+- CreateMultipartUpload (S3)
+- Gera presigned URLs
+- Retorna videoId + uploadUrls
+end note
 
-    note right of awsLambda
-    - Recebe: bucket, key, uploadId
-    - Envia ETag + PartNumber para a lambda
-    end note
+Rel(userProcess, awsS3PreSignedURL, "Upload direto no S3", "HTTP", "pre-signed urls")
+Rel(awsS3PreSignedURL, awsS3PartUpload, "Upload das partes")
 
-    Rel(awsLambda, processVideo, "Retorna o chunk_number e o etag", "HTTP", "POST", "POST /process-video/{video_id}")
-    Rel(processVideo, cassandraDB, "Salva o chunk_number e o etag no Cassandra DB para cada parte do vídeo")
+Rel_L(awsS3PartUpload, awsEventBridge, "Evento PartUploaded (ETag, PartNumber)")
+Rel(awsEventBridge, awsApiDestinationProcess, "Rule → API Destination")
+Rel(awsApiDestinationProcess, processVideo, "POST /process-video/{video_id}")
 
-    Rel(awsS3CompleteMultipartUpload, awsLambdaCompleteMultipartUpload, "S3 envia evento de finalização do upload de partes do vídeo para a lambda")
-    Rel(awsLambdaCompleteMultipartUpload, completeMultipartUpload, "Lambda finaliza o upload de partes do vídeo")
+Rel(awsS3CompleteMultipartUpload, awsEventBridge, "Evento CompleteMultipartUpload")
+Rel(awsEventBridge, awsApiDestinationComplete, "Rule → API Destination")
+Rel(awsApiDestinationComplete, completeMultipartUpload, "POST /{video_id}")
 
-    note top of completeMultipartUpload
-    - Recebe: video_id
-    - Finaliza o upload de partes do vídeo
-    - Atualiza o status do vídeo para "completed"
-    end note
+note top of completeMultipartUpload
+- Recebe: video_id
+- Finaliza upload
+- Atualiza status para "completed"
+end note
 
+Rel(completeMultipartUpload, awsSQSSplitVideo, "Publica mensagem", "{video_id}")
 
-    Rel(completeMultipartUpload, awsSQSSplitVideo, "Publica mensagem na fila de divisão do vídeo em partes por tempo do video", "{video_id}")
-    Rel_Back(awsSQSSplitVideo, k8sPodSplitVideo, "Consome a mensagem da fila de divisão do vídeo em partes por tempo do video", "Divide por X minutos")
-    Rel(k8sPodSplitVideo, awsSQSPrintVideo, "Publica a mensagem na fila de impressão do vídeo", "{etag, part_number}")
-    Rel_Back(awsSQSPrintVideo, k8sPodPrintVideo, "Consome a mensagem da fila de impressão do vídeo")
+Rel_Back(awsSQSSplitVideo, splitWorker, "Consome SQS", "Cria Job Split")
+Rel(splitWorker, k8sJobSplitVideo, "Cria Job", "Divide por X minutos")
 
-    Rel(awsSQSSplitVideo, awsSQSDLQ, "Mensagens com falha após N tentativas")
-    Rel(awsSQSPrintVideo, awsSQSDLQ, "Mensagens com falha após N tentativas")
+Rel(k8sJobSplitVideo, awsSQSPrintVideo, "Publica mensagens", "{etag, part_number}")
 
-    note left of awsSQSDLQ
-    **Dead Letter Queue (DLQ)**
-    - Captura mensagens que falharam após N tentativas
-    - Evita loop infinito de mensagens com erro
-    - Permite análise e reprocessamento manual
-    - Configurar alarme para monitorar DLQ
-    end note
+Rel_Back(awsSQSPrintVideo, printWorker, "Consome SQS", "Cria Job Print")
+Rel(printWorker, k8sJobPrintVideo, "Cria Job", "Processa partes")
 
-    note bottom of k8sPodSplitVideo
-    - Recebe: video_id
-    - Divide o vídeo em partes por tempo do video(1 minuto)
-    - Publica a mensagem na fila de impressão do vídeo para cada parte do vídeo
-    end note
+Rel(awsSQSSplitVideo, awsSQSDLQ, "Falha após N tentativas")
+Rel(awsSQSPrintVideo, awsSQSDLQ, "Falha após N tentativas")
 
-    note bottom of k8sPodPrintVideo
-    - Recebe: etag, part_number
-    - Tira print a cada 1 segundo ao longo do tempo definido no video(FFMPEG)
-    end note
+note left of awsSQSDLQ
+Dead Letter Queue:
+- Captura mensagens com falha
+- Evita loop infinito
+- Permite reprocessamento
+- Alarmes configurados
+end note
+
+note bottom of k8sJobSplitVideo
+- Recebe: video_id
+- Divide o vídeo por tempo (1 min)
+- Publica mensagens na fila de impressão
+end note
+
+note bottom of k8sJobPrintVideo
+- Recebe: etag, part_number
+- Gera prints a cada 1s (FFMPEG)
+end note
+
 @enduml

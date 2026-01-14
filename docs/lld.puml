@@ -1,0 +1,100 @@
+@startuml LLD
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+!theme C4_brown from https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/themes
+
+Container_Boundary(fiapx, "FIAPX API") {
+
+    Component(apiGateway, "API Gateway", "HTTP Router")
+
+    Component(createURLCtrl, "CreateURLController", "Cria multipart upload")
+    Component(presignService, "PresignService", "Gera presigned URLs")
+    Component(videoRepo, "VideoRepository", "Cassandra")
+
+    Component(processVideoCtrl, "ProcessVideoController", "Recebe eventos de part upload")
+    Component(etagHandler, "ETagHandler", "Valida partes")
+
+    Component(completeUploadCtrl, "CompleteUploadController", "Finaliza upload")
+    Component(statusUpdater, "StatusUpdater", "Atualiza status")
+    Component(sqsPublisher, "SQSPublisher", "Publica mensagens no SQS")
+}
+
+Container_Boundary(workers, "Kubernetes Workers") {
+
+    Component(splitWorker, "Split Worker", "SQS Consumer")
+    Component(printWorker, "Print Worker", "SQS Consumer")
+
+    Component(jobFactory, "JobFactory", "Cria Kubernetes Jobs")
+}
+
+Container_Boundary(jobs, "Kubernetes Jobs") {
+
+    Component(splitJob, "Split Video Job", "FFMPEG Split")
+    Component(printJob, "Print Video Job", "FFMPEG Print")
+}
+
+Container_Ext(sqsSplit, "SQS Split Video")
+Container_Ext(sqsPrint, "SQS Print Video")
+Container_Ext(dlq, "SQS DLQ")
+
+Container_Ext(s3, "AWS S3")
+Container_Ext(cassandra, "Cassandra DB")
+
+Rel(apiGateway, createURLCtrl, "Routes POST /create-url")
+Rel(createURLCtrl, presignService, "Gera URLs")
+Rel(presignService, s3, "CreateMultipartUpload")
+Rel(createURLCtrl, videoRepo, "Salva video_id")
+Rel(videoRepo, cassandra, "Persistência")
+
+note right of presignService
+- Calcula partSize
+- Calcula partsCount
+- Gera presigned URLs
+end note
+
+Rel(apiGateway, processVideoCtrl, "POST /process-video/{id}")
+Rel(processVideoCtrl, etagHandler, "Valida ETag")
+Rel(etagHandler, videoRepo, "Atualiza partes")
+
+Rel(apiGateway, completeUploadCtrl, "POST /{video_id}")
+Rel(completeUploadCtrl, statusUpdater, "Marca como completed")
+Rel(statusUpdater, videoRepo, "Atualiza status")
+Rel(completeUploadCtrl, sqsPublisher, "Publica no SQS Split")
+
+note right of sqsPublisher
+Payload:
+{ video_id }
+end note
+
+Rel(sqsSplit, splitWorker, "Consome")
+Rel(splitWorker, jobFactory, "Cria Job")
+Rel(jobFactory, splitJob, "Job Split")
+
+note bottom of splitJob
+- Baixa vídeo do S3
+- Divide por tempo (1 min)
+- Publica partes no SQS Print
+end note
+
+Rel(splitJob, sqsPrint, "Publica {etag, part_number}")
+
+Rel(sqsPrint, printWorker, "Consome")
+Rel(printWorker, jobFactory, "Cria Job")
+Rel(jobFactory, printJob, "Job Print")
+
+note bottom of printJob
+- Baixa segmento do S3
+- Gera print a cada 1s
+- Armazena imagens
+end note
+
+Rel(sqsSplit, dlq, "Falha após N tentativas")
+Rel(sqsPrint, dlq, "Falha após N tentativas")
+
+note left of dlq
+DLQ:
+- Mensagens inválidas
+- Reprocessamento manual
+- Alarmes
+end note
+
+@enduml
