@@ -3,6 +3,8 @@
 !include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
 !theme C4_brown from https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/themes
 
+LAYOUT_LEFT_RIGHT()
+
 System_Boundary(frontend, "Frontend", "Frontend system") {
     Person(userInitiate, "User", "Usuário inicia envio do vídeo")
     Person(userProcess, "User", "Usuário processa o vídeo")
@@ -12,20 +14,28 @@ Enterprise_Boundary(fiapx, "FIAPX", "FiapX system") {
     Container(createURL, "/create-url", "Cria uma URL para o vídeo para processar o video")
     Container(processVideo, "/{video_id}", "Processa o vídeo", "{chunk_number, etag}")
     Container(completeMultipartUpload, "/{video_id}", "Finaliza o upload de partes do vídeo")
+    Container(sendEmail, "/send-email", "Envia email de impressão completada")
+    Container(sendSMS, "/send-sms", "Envia SMS de impressão completada")
+    Container(printCompleted, "/print-video/{video_id}/part/{part_number}", "Imagens impressas completada")
 }
 
 System_Boundary(aws, "AWS", "AWS system") {
     Container_Ext(awsS3PreSignedURL, "AWS S3", "Serviço de armazenamento de objetos")
     Container_Ext(awsS3PartUpload, "AWS S3 Part Upload", "Upload de partes do vídeo")
     Container_Ext(awsS3CompleteMultipartUpload, "AWS S3 Complete Multipart Upload", "Evento de finalização do upload")
+    Container_Ext(awsS3Images, "AWS S3 Images", "Armazenamento de imagens")
+    Container_Ext(awsSNSPrintCompleted, "AWS SNS Print Completed", "Publica evento de impressão completada")
 
     SystemQueue(awsSQSSplitVideo, "AWS SQS Split Video", "Fila para divisão do vídeo")
     SystemQueue(awsSQSPrintVideo, "AWS SQS Print Video", "Fila para impressão do vídeo")
     SystemQueue(awsSQSDLQ, "AWS SQS DLQ", "Dead Letter Queue")
+    SystemQueue(awsSQSSendEmailQueue, "AWS SQS Send Email Queue", "Fila para envio de email")
+    SystemQueue(awsSQSSendSMSQueue, "AWS SQS Send SMS Queue", "Fila para envio de SMS")
 
     Container_Ext(awsEventBridge, "AWS EventBridge", "Roteamento de eventos")
     Container_Ext(awsApiDestinationProcess, "API Destination (process)", "POST /process-video/{video_id}")
     Container_Ext(awsApiDestinationComplete, "API Destination (complete)", "POST /{video_id}")
+    Container_Ext(awsApiDestinationPrintCompleted, "API Destination (print completed)", "POST /print-video/{video_id}/part/{part_number}")
 }
 
 System_Boundary(k8s, "Kubernetes", "Kubernetes system") {
@@ -36,12 +46,12 @@ System_Boundary(k8s, "Kubernetes", "Kubernetes system") {
     Container_Ext(k8sJobPrintVideo, "Job Print Video", "Gera prints do vídeo")
 }
 
-System_Boundary(database, "Database", "Database system") {
-    SystemDb_Ext(scylladb, "ScyllaDB DB", "Armazena status do vídeo")
+System_Boundary(database_boundary, "Database", "Database system") {
+    SystemDb_Ext(db, "ScyllaDB DB", "Armazena status do vídeo")
 }
 
 Rel(userInitiate, createURL, "Cria urls pré-assinadas", "HTTP", "POST /create-url")
-Rel(createURL, scylladb, "Salva o video_id")
+Rel(createURL, db, "Salva o video_id")
 
 note right of createURL
 - Calcula partSize e partsCount
@@ -56,10 +66,12 @@ Rel(awsS3PreSignedURL, awsS3PartUpload, "Upload das partes")
 Rel_L(awsS3PartUpload, awsEventBridge, "Evento PartUploaded (ETag, PartNumber)")
 Rel(awsEventBridge, awsApiDestinationProcess, "Rule → API Destination")
 Rel(awsApiDestinationProcess, processVideo, "POST /process-video/{video_id}")
+Rel(processVideo, db, "Atualiza status do video para 'processing'")
 
 Rel(awsS3CompleteMultipartUpload, awsEventBridge, "Evento CompleteMultipartUpload")
 Rel(awsEventBridge, awsApiDestinationComplete, "Rule → API Destination")
 Rel(awsApiDestinationComplete, completeMultipartUpload, "POST /{video_id}")
+Rel(completeMultipartUpload, db, "Atualiza status do video para 'printing'")
 
 note top of completeMultipartUpload
 - Recebe: video_id
@@ -76,6 +88,19 @@ Rel(k8sJobSplitVideo, awsSQSPrintVideo, "Publica mensagens", "{etag, part_number
 
 Rel_Back(awsSQSPrintVideo, printWorker, "Consome SQS", "Cria Job Print")
 Rel(printWorker, k8sJobPrintVideo, "Cria Job", "Processa partes")
+
+Rel(k8sJobPrintVideo, awsS3Images, "Armazena imagens", "URL: user/{user_id}/video/{video_id}/print/{part_number}.jpg")
+Rel(awsS3Images, awsEventBridge, "Evento PrintCompleted (part_number)")
+Rel(awsEventBridge, awsApiDestinationPrintCompleted, "Rule → API Destination")
+Rel(awsApiDestinationPrintCompleted, printCompleted, "POST /print-video/{video_id}/part/{part_number}")
+
+Rel(printCompleted, db, "Atualiza status do video para 'completed'")
+Rel(printCompleted, awsSNSPrintCompleted, "Publica evento no topic 'print-completed'")
+Rel(awsSNSPrintCompleted, awsSQSSendEmailQueue, "Publica mensagem no SQS Send Email Queue")
+Rel(awsSNSPrintCompleted, awsSQSSendSMSQueue, "Publica mensagem no SQS Send SMS Queue")
+
+Rel(awsSQSSendEmailQueue, sendEmail, "Consome SQS", "Envia email de impressão completada")
+Rel(awsSQSSendSMSQueue, sendSMS, "Consome SQS", "Se telefone cadastrado, envia SMS de impressão completada")
 
 Rel(awsSQSSplitVideo, awsSQSDLQ, "Falha após N tentativas")
 Rel(awsSQSPrintVideo, awsSQSDLQ, "Falha após N tentativas")
