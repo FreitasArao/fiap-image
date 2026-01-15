@@ -11,43 +11,59 @@ System_Boundary(frontend, "Frontend", "Frontend system") {
 }
 
 Enterprise_Boundary(fiapx, "FIAPX", "FiapX system") {
-    Container(createURL, "/create-url", "Cria uma URL para o vídeo para processar o video")
-    Container(processVideo, "/{video_id}", "Processa o vídeo", "{chunk_number, etag}")
-    Container(completeMultipartUpload, "/{video_id}", "Finaliza o upload de partes do vídeo")
-    Container(sendEmail, "/send-email", "Envia email de impressão completada")
-    Container(sendSMS, "/send-sms", "Envia SMS de impressão completada")
-    Container(printCompleted, "/print-video/{video_id}/part/{part_number}", "Imagens impressas completada")
+    Container_Boundary(api, "API routes") {
+        Container(createURL, "/create-url", "Cria uma URL para o vídeo para processar o video")
+        Container(processVideo, "/{video_id}", "Processa o vídeo", "{chunk_number, etag}")
+        Container(completeMultipartUpload, "/{video_id}", "Finaliza o upload de partes do vídeo")
+        Container(printCompleted, "/print-video/{video_id}/part/{part_number}", "Imagens impressas completada")
+    }
+
+    Container_Boundary(consumers, "API consumers") {
+        Container(sendEmailConsumer, "/send-email", "Envia email de impressão completada")
+        Container(sendSMSConsumer, "/send-sms", "Envia SMS de impressão completada")
+    }
 }
 
 System_Boundary(aws, "AWS", "AWS system") {
+    Container_Boundary(s3, "S3") {
     Container_Ext(awsS3PreSignedURL, "AWS S3", "Serviço de armazenamento de objetos")
-    Container_Ext(awsS3PartUpload, "AWS S3 Part Upload", "Upload de partes do vídeo")
-    Container_Ext(awsS3CompleteMultipartUpload, "AWS S3 Complete Multipart Upload", "Evento de finalização do upload")
-    Container_Ext(awsS3Images, "AWS S3 Images", "Armazenamento de imagens")
-    Container_Ext(awsSNSPrintCompleted, "AWS SNS Print Completed", "Publica evento de impressão completada")
+        Container_Ext(awsS3PartUpload, "AWS S3 Part Upload", "Upload de partes do vídeo")
+        Container_Ext(awsS3CompleteMultipartUpload, "AWS S3 Complete Multipart Upload", "Evento de finalização do upload")
+        Container_Ext(awsS3Images, "AWS S3 Images", "Armazenamento de imagens")
+    }
+    Container_Boundary(sns, "SNS") {
+        Container_Ext(awsSNSPrintCompleted, "AWS SNS Print Completed", "Publica evento de impressão completada")
+    }
+    Container_Boundary(sqs, "SQS") {
+        SystemQueue(awsSQSSplitVideo, "AWS SQS Split Video", "Fila para divisão do vídeo")
+        SystemQueue(awsSQSPrintVideo, "AWS SQS Print Video", "Fila para impressão do vídeo")
+        SystemQueue(awsSQSDLQ, "AWS SQS DLQ", "Dead Letter Queue")
+        SystemQueue(awsSQSSendEmailQueue, "AWS SQS Send Email Queue", "Fila para envio de email")
+        SystemQueue(awsSQSSendSMSQueue, "AWS SQS Send SMS Queue", "Fila para envio de SMS")
+    }
 
-    SystemQueue(awsSQSSplitVideo, "AWS SQS Split Video", "Fila para divisão do vídeo")
-    SystemQueue(awsSQSPrintVideo, "AWS SQS Print Video", "Fila para impressão do vídeo")
-    SystemQueue(awsSQSDLQ, "AWS SQS DLQ", "Dead Letter Queue")
-    SystemQueue(awsSQSSendEmailQueue, "AWS SQS Send Email Queue", "Fila para envio de email")
-    SystemQueue(awsSQSSendSMSQueue, "AWS SQS Send SMS Queue", "Fila para envio de SMS")
-
-    Container_Ext(awsEventBridge, "AWS EventBridge", "Roteamento de eventos")
-    Container_Ext(awsApiDestinationProcess, "API Destination (process)", "POST /process-video/{video_id}")
-    Container_Ext(awsApiDestinationComplete, "API Destination (complete)", "POST /{video_id}")
-    Container_Ext(awsApiDestinationPrintCompleted, "API Destination (print completed)", "POST /print-video/{video_id}/part/{part_number}")
+    Container_Boundary(eventBridge, "EventBridge") {
+        Container_Ext(awsEventBridge, "AWS EventBridge", "Roteamento de eventos")
+        Container_Ext(awsApiDestinationProcess, "API Destination (process)", "POST /process-video/{video_id}")
+        Container_Ext(awsApiDestinationComplete, "API Destination (complete)", "POST /{video_id}")
+        Container_Ext(awsApiDestinationPrintCompleted, "API Destination (print completed)", "POST /print-video/{video_id}/part/{part_number}")
+    }
 }
 
 System_Boundary(k8s, "Kubernetes", "Kubernetes system") {
-    Container_Ext(splitWorker, "Split Worker", "Consome SQS e cria Jobs")
-    Container_Ext(printWorker, "Print Worker", "Consome SQS e cria Jobs")
+    Container_Boundary(workers, "Workers") {
+        Container_Ext(splitWorker, "Split Worker", "Consome SQS e cria Jobs")
+        Container_Ext(printWorker, "Print Worker", "Consome SQS e cria Jobs")
+    }
 
-    Container_Ext(k8sJobSplitVideo, "Job Split Video", "Divide vídeo em partes por tempo")
-    Container_Ext(k8sJobPrintVideo, "Job Print Video", "Gera prints do vídeo")
+    Container_Boundary(jobs, "Jobs") {
+        Container_Ext(k8sJobSplitVideo, "Job Split Video", "Divide vídeo em partes por tempo")
+        Container_Ext(k8sJobPrintVideo, "Job Print Video", "Gera prints do vídeo")
+    }
 }
 
 System_Boundary(database_boundary, "Database", "Database system") {
-    SystemDb_Ext(db, "ScyllaDB DB", "Armazena status do vídeo")
+    SystemDb_Ext(db, "Cassandra DB", "Armazena status do vídeo")
 }
 
 Rel(userInitiate, createURL, "Cria urls pré-assinadas", "HTTP", "POST /create-url")
@@ -99,8 +115,8 @@ Rel(printCompleted, awsSNSPrintCompleted, "Publica evento no topic 'print-comple
 Rel(awsSNSPrintCompleted, awsSQSSendEmailQueue, "Publica mensagem no SQS Send Email Queue")
 Rel(awsSNSPrintCompleted, awsSQSSendSMSQueue, "Publica mensagem no SQS Send SMS Queue")
 
-Rel(awsSQSSendEmailQueue, sendEmail, "Consome SQS", "Envia email de impressão completada")
-Rel(awsSQSSendSMSQueue, sendSMS, "Consome SQS", "Se telefone cadastrado, envia SMS de impressão completada")
+Rel(awsSQSSendEmailQueue, sendEmailConsumer, "Consome SQS", "Envia email de impressão completada")
+Rel(awsSQSSendSMSQueue, sendSMSConsumer, "Consome SQS", "Se telefone cadastrado, envia SMS de impressão completada")
 
 Rel(awsSQSSplitVideo, awsSQSDLQ, "Falha após N tentativas")
 Rel(awsSQSPrintVideo, awsSQSDLQ, "Falha após N tentativas")
