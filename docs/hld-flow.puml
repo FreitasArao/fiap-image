@@ -5,7 +5,7 @@
 
 LAYOUT_TOP_DOWN()
 
-title Processamento de Vídeo - Fluxo Completo
+title Processamento de Vídeo - Fluxo Completo + Auth OTP (Cognito)
 
 ' =====================================
 ' FRONTEND
@@ -15,30 +15,42 @@ System_Boundary(frontend, "Frontend") {
 }
 
 ' =====================================
+' AUTH (FORA DA APLICAÇÃO)
+' =====================================
+System_Boundary(auth, "AWS Auth") {
+    Container_Ext(apiGateway, "API Gateway", "AWS", "Gateway público")
+    Container_Ext(cognito, "Cognito User Pool", "AWS", "Auth OTP por email")
+
+    Container_Ext(lambdaDefine, "Lambda DefineAuth", "Lambda", "Controla desafio")
+    Container_Ext(lambdaCreate, "Lambda CreateAuth", "Lambda", "Gera e envia OTP")
+    Container_Ext(lambdaVerify, "Lambda VerifyAuth", "Lambda", "Valida OTP")
+}
+
+' =====================================
 ' API FIAPX
 ' =====================================
 Enterprise_Boundary(fiapx, "FIAPX API") {
-    Container(createURL, "/create-url", "API", "Cria URLs pré-assinadas\n- Calcula partSize e partsCount\n- CreateMultipartUpload (S3)\n- Gera presigned URLs")
-    Container(processVideo, "/process-video/{video_id}", "API", "Processa upload de parte\n{chunk_number, etag}")
-    Container(completeUpload, "/{video_id}", "API", "Finaliza upload multipart\n- Atualiza status para 'printing'")
-    Container(printCompleted, "/print-video/{video_id}/part/{part}", "API", "Notifica impressão completada")
+    Container(createURL, "/create-url", "API", "Cria URLs pré-assinadas")
+    Container(processVideo, "/process-video/{video_id}", "API", "Processa upload de parte")
+    Container(completeUpload, "/{video_id}", "API", "Finaliza upload multipart")
+    Container(printCompleted, "/print-video/{video_id}/part/{part}", "API", "Notifica impressão")
 }
 
 ' =====================================
 ' AWS S3
 ' =====================================
 System_Boundary(awsS3, "AWS S3") {
-    Container_Ext(s3PreSigned, "S3 Pre-Signed URLs", "S3", "Upload direto via URLs assinadas")
-    Container_Ext(s3PartUpload, "S3 Part Upload", "S3", "Recebe partes do vídeo")
+    Container_Ext(s3PreSigned, "S3 Pre-Signed URLs", "S3", "Upload direto")
+    Container_Ext(s3PartUpload, "S3 Part Upload", "S3", "Recebe partes")
     Container_Ext(s3Complete, "S3 Complete Multipart", "S3", "Evento de finalização")
-    Container_Ext(s3Images, "S3 Images Bucket", "S3", "Armazena prints gerados\nuser/{id}/video/{id}/print/{part}.jpg")
+    Container_Ext(s3Images, "S3 Images Bucket", "S3", "Armazena prints")
 }
 
 ' =====================================
 ' AWS EVENTBRIDGE
 ' =====================================
 System_Boundary(awsEvents, "AWS EventBridge") {
-    Container_Ext(eventBridge, "EventBridge", "Events", "Roteamento de eventos S3")
+    Container_Ext(eventBridge, "EventBridge", "Events", "Roteamento")
     Container_Ext(apiDestProcess, "API Dest: Process", "Rule", "POST /process-video/{video_id}")
     Container_Ext(apiDestComplete, "API Dest: Complete", "Rule", "POST /{video_id}")
     Container_Ext(apiDestPrint, "API Dest: Print", "Rule", "POST /print-video/{video_id}/part/{part}")
@@ -48,31 +60,31 @@ System_Boundary(awsEvents, "AWS EventBridge") {
 ' AWS SQS
 ' =====================================
 System_Boundary(awsSQS, "AWS SQS") {
-    SystemQueue(sqsSplitVideo, "SQS Split Video", "Fila para divisão do vídeo")
-    SystemQueue(sqsPrintVideo, "SQS Print Video", "Fila para impressão do vídeo")
-    SystemQueue(sqsDLQ, "SQS DLQ", "Dead Letter Queue\n- Captura falhas\n- Alarmes configurados")
+    SystemQueue(sqsSplitVideo, "SQS Split Video", "Fila divisão")
+    SystemQueue(sqsPrintVideo, "SQS Print Video", "Fila impressão")
+    SystemQueue(sqsDLQ, "SQS DLQ", "Dead Letter Queue")
 }
 
 ' =====================================
 ' AWS SNS
 ' =====================================
 System_Boundary(awsSNS, "AWS SNS") {
-    Container_Ext(snsPrintCompleted, "SNS Print Completed", "Topic", "Evento de impressão finalizada")
-    SystemQueue(sqsEmail, "SQS Email Queue", "Fila para envio de email")
-    SystemQueue(sqsSMS, "SQS SMS Queue", "Fila para envio de SMS")
+    Container_Ext(snsPrintCompleted, "SNS Print Completed", "Topic", "Evento final")
+    SystemQueue(sqsEmail, "SQS Email Queue", "Emails")
+    SystemQueue(sqsSMS, "SQS SMS Queue", "SMS")
 }
 
 ' =====================================
 ' KUBERNETES
 ' =====================================
 System_Boundary(k8s, "Kubernetes Cluster") {
-    Container_Boundary(workers, "Workers (Deployments)") {
-        Container_Ext(splitWorker, "Split Worker", "K8s", "Consome SQS Split\nCria Jobs de divisão")
-        Container_Ext(printWorker, "Print Worker", "K8s", "Consome SQS Print\nCria Jobs de impressão")
+    Container_Boundary(workers, "Workers") {
+        Container_Ext(splitWorker, "Split Worker", "K8s", "Consome SQS Split")
+        Container_Ext(printWorker, "Print Worker", "K8s", "Consome SQS Print")
     }
     Container_Boundary(jobs, "Jobs") {
-        Container_Ext(jobSplit, "Job: Split Video", "K8s Job", "Divide vídeo por tempo (1 min)")
-        Container_Ext(jobPrint, "Job: Print Video", "K8s Job", "Gera prints a cada 1s (FFMPEG)")
+        Container_Ext(jobSplit, "Job: Split Video", "K8s Job", "Divide vídeo")
+        Container_Ext(jobPrint, "Job: Print Video", "K8s Job", "Gera prints")
     }
 }
 
@@ -80,8 +92,8 @@ System_Boundary(k8s, "Kubernetes Cluster") {
 ' CONSUMERS
 ' =====================================
 Enterprise_Boundary(consumers, "FIAPX Consumers") {
-    Container(emailConsumer, "Email Consumer", "API", "Envia email de notificação")
-    Container(smsConsumer, "SMS Consumer", "API", "Envia SMS se telefone cadastrado")
+    Container(emailConsumer, "Email Consumer", "API", "Envia email")
+    Container(smsConsumer, "SMS Consumer", "API", "Envia SMS")
 }
 
 ' =====================================
@@ -92,70 +104,82 @@ System_Boundary(database, "Database") {
 }
 
 ' =====================================
+' FLUXO 0: AUTENTICAÇÃO OTP
+' =====================================
+Rel(user, apiGateway, "0. POST /auth/login")
+Rel(apiGateway, cognito, "Inicia Custom Auth")
+Rel(cognito, lambdaDefine, "DefineAuthChallenge")
+Rel(cognito, lambdaCreate, "CreateAuthChallenge (envia OTP)")
+Rel(user, apiGateway, "Envia código OTP")
+Rel(apiGateway, cognito, "RespondToAuthChallenge")
+Rel(cognito, lambdaVerify, "VerifyAuthChallenge")
+Rel(cognito, user, "Retorna JWT")
+
+' =====================================
 ' FLUXO 1: CRIAÇÃO DE URL
 ' =====================================
-Rel(user, createURL, "1. POST /create-url", "HTTP")
+Rel(user, createURL, "1. POST /create-url", "JWT")
 Rel(createURL, db, "2. Salva video_id")
-Rel(createURL, s3PreSigned, "3. Retorna URLs assinadas")
+Rel(createURL, s3PreSigned, "3. Retorna URLs")
 
 ' =====================================
 ' FLUXO 2: UPLOAD DAS PARTES
 ' =====================================
-Rel(user, s3PreSigned, "4. Upload direto no S3", "pre-signed URLs")
-Rel(s3PreSigned, s3PartUpload, "5. Upload das partes")
+Rel(user, s3PreSigned, "4. Upload S3")
+Rel(s3PreSigned, s3PartUpload, "5. Upload partes")
 
 ' =====================================
 ' FLUXO 3: PROCESSAMENTO DE PARTE
 ' =====================================
-Rel(s3PartUpload, eventBridge, "6. Evento PartUploaded", "{ETag, PartNumber}")
-Rel(eventBridge, apiDestProcess, "7. Rule match")
-Rel(apiDestProcess, processVideo, "8. POST /process-video/{video_id}")
-Rel(processVideo, db, "9. Status → 'processing'")
+Rel(s3PartUpload, eventBridge, "6. Evento PartUploaded")
+Rel(eventBridge, apiDestProcess, "7. Rule")
+Rel(apiDestProcess, processVideo, "8. POST")
+Rel(processVideo, db, "9. Status → processing")
 
 ' =====================================
-' FLUXO 4: FINALIZAÇÃO DO UPLOAD
+' FLUXO 4: FINALIZAÇÃO
 ' =====================================
-Rel(s3Complete, eventBridge, "10. Evento CompleteMultipartUpload")
-Rel(eventBridge, apiDestComplete, "11. Rule match")
-Rel(apiDestComplete, completeUpload, "12. POST /{video_id}")
-Rel(completeUpload, db, "13. Status → 'printing'")
-Rel(completeUpload, sqsSplitVideo, "14. Publica mensagem", "{video_id}")
+Rel(s3Complete, eventBridge, "10. Evento Complete")
+Rel(eventBridge, apiDestComplete, "11. Rule")
+Rel(apiDestComplete, completeUpload, "12. POST")
+Rel(completeUpload, db, "13. Status → printing")
+Rel(completeUpload, sqsSplitVideo, "14. Publica")
 
 ' =====================================
-' FLUXO 5: DIVISÃO DO VÍDEO
+' FLUXO 5: SPLIT
 ' =====================================
-Rel(sqsSplitVideo, splitWorker, "15. Consome SQS")
-Rel(splitWorker, jobSplit, "16. Cria Job", "Divide por X minutos")
-Rel(jobSplit, sqsPrintVideo, "17. Publica mensagens", "{etag, part_number}")
+Rel(sqsSplitVideo, splitWorker, "15. Consome")
+Rel(splitWorker, jobSplit, "16. Job")
+Rel(jobSplit, sqsPrintVideo, "17. Publica")
 
 ' =====================================
-' FLUXO 6: IMPRESSÃO DO VÍDEO
+' FLUXO 6: PRINT
 ' =====================================
-Rel(sqsPrintVideo, printWorker, "18. Consome SQS")
-Rel(printWorker, jobPrint, "19. Cria Job", "Processa partes")
-Rel(jobPrint, s3Images, "20. Armazena prints")
+Rel(sqsPrintVideo, printWorker, "18. Consome")
+Rel(printWorker, jobPrint, "19. Job")
+Rel(jobPrint, s3Images, "20. Armazena")
 
 ' =====================================
-' FLUXO 7: NOTIFICAÇÃO DE IMPRESSÃO
+' FLUXO 7: NOTIFICAÇÃO
 ' =====================================
-Rel(s3Images, eventBridge, "21. Evento PrintCompleted", "{part_number}")
-Rel(eventBridge, apiDestPrint, "22. Rule match")
-Rel(apiDestPrint, printCompleted, "23. POST /print-video/{video_id}/part/{part}")
-Rel(printCompleted, db, "24. Status → 'completed'")
-Rel(printCompleted, snsPrintCompleted, "25. Publica evento")
+Rel(s3Images, eventBridge, "21. Evento")
+Rel(eventBridge, apiDestPrint, "22. Rule")
+Rel(apiDestPrint, printCompleted, "23. POST")
+Rel(printCompleted, db, "24. Status → completed")
+Rel(printCompleted, snsPrintCompleted, "25. Publica")
 
 ' =====================================
-' FLUXO 8: NOTIFICAÇÕES
+' FLUXO 8: FANOUT
 ' =====================================
-Rel(snsPrintCompleted, sqsEmail, "26. Fan-out")
-Rel(snsPrintCompleted, sqsSMS, "27. Fan-out")
-Rel(sqsEmail, emailConsumer, "28. Consome SQS")
-Rel(sqsSMS, smsConsumer, "29. Consome SQS")
+Rel(snsPrintCompleted, sqsEmail, "26. Email")
+Rel(snsPrintCompleted, sqsSMS, "27. SMS")
+Rel(sqsEmail, emailConsumer, "28. Envia")
+Rel(sqsSMS, smsConsumer, "29. Envia")
 
 ' =====================================
 ' DLQ
 ' =====================================
-Rel(sqsSplitVideo, sqsDLQ, "Falha após N tentativas")
-Rel(sqsPrintVideo, sqsDLQ, "Falha após N tentativas")
+Rel(sqsSplitVideo, sqsDLQ, "Falha")
+Rel(sqsPrintVideo, sqsDLQ, "Falha")
 
 @enduml
