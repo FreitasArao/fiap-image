@@ -1,7 +1,5 @@
-import {
-  CreateVideoURLS,
-  MegaBytesValueObject,
-} from '@core/domain/create-video-urls'
+import { CreateVideoURLS } from '@core/domain/create-video-urls'
+import { MegabytesValueObject } from '@core/domain/value-object/megabytes.vo'
 import { beforeAll, describe, expect, it } from 'bun:test'
 
 describe('CreateVideoUrls', () => {
@@ -22,33 +20,33 @@ describe('CreateVideoUrls', () => {
   })
   it.each([
     // Pequenos
-    { size: MegaBytesValueObject.create(5.1), expected: 1 },
-    { size: MegaBytesValueObject.create(31.9), expected: 1 },
-    { size: MegaBytesValueObject.create(32), expected: 1 },
-    { size: MegaBytesValueObject.create(32.1), expected: 2 },
-    { size: MegaBytesValueObject.create(63.9), expected: 2 },
-    { size: MegaBytesValueObject.create(64), expected: 2 },
-    { size: MegaBytesValueObject.create(64.1), expected: 3 },
+    { size: MegabytesValueObject.create(5.1), expected: 1 },
+    { size: MegabytesValueObject.create(31.9), expected: 1 },
+    { size: MegabytesValueObject.create(32), expected: 1 },
+    { size: MegabytesValueObject.create(32.1), expected: 2 },
+    { size: MegabytesValueObject.create(63.9), expected: 2 },
+    { size: MegabytesValueObject.create(64), expected: 2 },
+    { size: MegabytesValueObject.create(64.1), expected: 3 },
     // Tamanhos médios
-    { size: MegaBytesValueObject.create(100), expected: 4 },
-    { size: MegaBytesValueObject.create(100.5), expected: 4 },
-    { size: MegaBytesValueObject.create(128), expected: 4 },
-    { size: MegaBytesValueObject.create(129), expected: 5 },
-    { size: MegaBytesValueObject.create(256.3), expected: 9 },
-    { size: MegaBytesValueObject.create(512.7), expected: 17 },
-    { size: MegaBytesValueObject.create(1024.4), expected: 33 },
+    { size: MegabytesValueObject.create(100), expected: 4 },
+    { size: MegabytesValueObject.create(100.5), expected: 4 },
+    { size: MegabytesValueObject.create(128), expected: 4 },
+    { size: MegabytesValueObject.create(129), expected: 5 },
+    { size: MegabytesValueObject.create(256.3), expected: 9 },
+    { size: MegabytesValueObject.create(512.7), expected: 17 },
+    { size: MegabytesValueObject.create(1024.4), expected: 33 },
     // Arquivos grandes
-    { size: MegaBytesValueObject.create(5120), expected: 160 },
-    { size: MegaBytesValueObject.create(10240), expected: 320 },
-    { size: MegaBytesValueObject.create(25600), expected: 800 },
-    { size: MegaBytesValueObject.create(50001), expected: 1563 },
-    { size: MegaBytesValueObject.create(75123.4), expected: 2348 },
-    { size: MegaBytesValueObject.create(100000), expected: 3125 },
+    { size: MegabytesValueObject.create(5120), expected: 160 },
+    { size: MegabytesValueObject.create(10240), expected: 320 },
+    { size: MegabytesValueObject.create(25600), expected: 800 },
+    { size: MegabytesValueObject.create(50001), expected: 1563 },
+    { size: MegabytesValueObject.create(75123.4), expected: 2348 },
+    { size: MegabytesValueObject.create(100000), expected: 3125 },
     // Próximo do limite de 10.000 partes
-    { size: MegaBytesValueObject.create(300000), expected: 9375 },
-    { size: MegaBytesValueObject.create(310000), expected: 9688 },
-    { size: MegaBytesValueObject.create(319999), expected: 10000 },
-    { size: MegaBytesValueObject.create(320000), expected: 10000 },
+    { size: MegabytesValueObject.create(300000), expected: 9375 },
+    { size: MegabytesValueObject.create(310000), expected: 9688 },
+    { size: MegabytesValueObject.create(319999), expected: 10000 },
+    { size: MegabytesValueObject.create(320000), expected: 10000 },
   ])('When video size is $size.value MB should return $expected parts', ({
     size,
     expected,
