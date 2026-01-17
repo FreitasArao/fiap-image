@@ -1,9 +1,9 @@
 import { Result } from '@core/domain/result'
 import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 import {
-  CreateUrlsUseCase,
-  CreateUrlsUseCaseResult,
-} from '@modules/video-processor/application/create-urls.use-case'
+  CreateVideoUseCase,
+  CreateVideoUseCaseResult,
+} from '@modules/video-processor/application/create-video.use-case'
 
 export type CreateVideoParams = {
   totalSize: number
@@ -13,18 +13,18 @@ export type CreateVideoParams = {
 export class VideoProcessorController {
   constructor(
     private readonly logger: AbstractLoggerService,
-    private readonly createUrlsUseCase: CreateUrlsUseCase,
+    private readonly createVideoUseCase: CreateVideoUseCase,
   ) {}
 
   async create(
     params: CreateVideoParams,
-  ): Promise<Result<CreateUrlsUseCaseResult, Error>> {
+  ): Promise<Result<CreateVideoUseCaseResult, Error>> {
     this.logger.log('Creating video and generating upload URLs', {
       totalSize: params.totalSize,
       duration: params.duration,
     })
 
-    const result = await this.createUrlsUseCase.execute({
+    const result = await this.createVideoUseCase.execute({
       totalSize: params.totalSize,
       duration: params.duration,
     })

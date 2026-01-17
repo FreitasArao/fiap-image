@@ -1,0 +1,161 @@
+@startuml HLD-Sequence
+!theme aws-orange
+
+title Processamento de Vídeo - Fluxo Completo
+
+skinparam backgroundColor #FEFEFE
+skinparam sequenceArrowThickness 2
+skinparam roundcorner 10
+skinparam maxmessagesize 200
+
+' Participantes organizados por camada
+box "Cliente" #LightBlue
+    actor Usuario as user
+end box
+
+box "Auth" #LightGreen
+    participant "Cognito" as cognito
+end box
+
+box "FIAPX API" #LightYellow
+    participant "POST /videos" as apiCreate
+    participant "GET /upload-urls" as apiUrls
+    participant "POST /parts/{n}" as apiParts
+    participant "POST /complete" as apiComplete
+end box
+
+box "AWS Storage" #Orange
+    database "S3 Videos" as s3
+    database "S3 Frames" as s3frames
+end box
+
+box "AWS Events" #Pink
+    participant "EventBridge" as eb
+    queue "SQS Split" as sqsSplit
+    queue "SQS Print" as sqsPrint
+end box
+
+box "Kubernetes" #Gray
+    participant "KEDA Split" as kedaSplit
+    participant "KEDA Print" as kedaPrint
+    participant "FFmpeg Job" as ffmpeg
+end box
+
+box "Notifications" #LightCyan
+    participant "SNS" as sns
+    participant "Lambda Email" as email
+end box
+
+database "Cassandra" as db #Gold
+
+== 0. Autenticação ==
+
+user -> cognito: POST /auth/login (email)
+cognito --> user: Código OTP (email)
+user -> cognito: POST /auth/verify (código)
+cognito --> user: JWT Token
+
+== 1. Criar Vídeo ==
+
+user -> apiCreate: POST /videos\n{totalSize, duration}
+activate apiCreate
+apiCreate -> s3: CreateMultipartUpload
+s3 --> apiCreate: uploadId
+apiCreate -> db: INSERT video (CREATED)
+apiCreate --> user: {videoId, uploadId, totalParts}
+deactivate apiCreate
+
+== 2. Obter URLs (Paginado) ==
+
+loop Batch de 20 URLs
+    user -> apiUrls: GET /upload-urls?start=N&limit=20
+    activate apiUrls
+    apiUrls -> s3: getSignedUrl (x20)
+    apiUrls -> db: UPDATE status = UPLOADING
+    apiUrls --> user: {urls: [...20], nextStart}
+    deactivate apiUrls
+end
+
+== 3. Upload Paralelo ==
+
+user -> s3: PUT presigned URL (parte 1)
+s3 --> user: ETag
+user -> apiParts: POST /parts/1 {etag}
+apiParts -> db: UPDATE part 1 (uploaded)
+
+note over user, s3
+    Upload paralelo de até 20 partes simultâneas.
+    Cliente reporta ETag de cada parte para tracking.
+end note
+
+== 4. Finalizar Upload ==
+
+user -> apiComplete: POST /complete\n{parts: [{partNumber, etag}...]}
+activate apiComplete
+apiComplete -> s3: CompleteMultipartUpload
+s3 --> apiComplete: 200 OK
+apiComplete -> db: UPDATE status = UPLOADED
+apiComplete --> user: 202 Accepted
+deactivate apiComplete
+
+== 5. Evento S3 (Automático) ==
+
+s3 -> eb: Object Created\n(CompleteMultipartUpload)
+activate eb
+
+note over eb
+    **RECONCILIAÇÃO**
+    Se chegou aqui, upload está 100% OK.
+    Sistema marca todas as partes como UPLOADED
+    mesmo que cliente não tenha reportado.
+end note
+
+eb -> sqsSplit: Publica mensagem
+deactivate eb
+
+== 6. Split do Vídeo ==
+
+sqsSplit -> kedaSplit: Poll (KEDA escala)
+activate kedaSplit
+kedaSplit -> ffmpeg: Cria K8s Job
+activate ffmpeg
+ffmpeg -> s3: Download vídeo
+ffmpeg -> ffmpeg: FFmpeg split\n(segmentos 60s)
+ffmpeg -> sqsPrint: Publica N segmentos
+ffmpeg -> db: UPDATE status = SPLITTING
+deactivate ffmpeg
+deactivate kedaSplit
+
+== 7. Extração de Frames ==
+
+sqsPrint -> kedaPrint: Poll (KEDA escala)
+activate kedaPrint
+kedaPrint -> ffmpeg: Cria K8s Job
+activate ffmpeg
+ffmpeg -> s3: Download segmento
+ffmpeg -> ffmpeg: FFmpeg extract\n(1 frame/segundo)
+ffmpeg -> s3frames: Upload frames
+ffmpeg -> db: UPDATE status = PRINTING
+deactivate ffmpeg
+deactivate kedaPrint
+
+== 8. Notificação ==
+
+s3frames -> eb: Object Created (último frame)
+eb -> sns: Publica evento
+sns -> email: Invoke Lambda
+email -> user: Email: "Vídeo processado!"
+
+db -> db: UPDATE status = COMPLETED
+
+== Fluxo Concluído ==
+
+note over user, db
+    **Tempo total estimado:**
+    - Upload 1GB: ~2 min
+    - Split: ~30s
+    - Print frames: ~3 min
+    - Total: ~5 minutos
+end note
+
+@enduml

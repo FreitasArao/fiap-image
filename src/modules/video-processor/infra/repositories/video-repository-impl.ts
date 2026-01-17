@@ -11,7 +11,20 @@ import type {
 } from '../tables'
 
 import { Video } from '@modules/video-processor/domain/entities/video'
+import { VideoPart } from '@modules/video-processor/domain/entities/video-part'
 import { VideoRepository } from '@modules/video-processor/domain/repositories/video.repository'
+import { UniqueEntityID } from '@modules/video-processor/domain/value-objects/unique-entity-id.vo'
+import { VideoMetadataVO } from '@modules/video-processor/domain/value-objects/video-metadata.vo'
+import {
+  VideoStatusVO,
+  type VideoStatus,
+} from '@modules/video-processor/domain/value-objects/video-status.vo'
+import { VideoThirdPartyIntegrationsMetadataVO } from '@modules/video-processor/domain/value-objects/video-third-party-integrations-metadata.vo'
+import { ThirdPartyIntegration } from '@modules/video-processor/domain/entities/third-party-integration.vo'
+import {
+  PartStatusVO,
+  type PartStatusType,
+} from '@modules/video-processor/domain/value-objects/part-status.vo'
 
 export class VideoRepositoryImpl
   extends DefaultDatabase
@@ -19,6 +32,79 @@ export class VideoRepositoryImpl
 {
   constructor(logger: AbstractLoggerService) {
     super(DataSource.getInstance(logger), logger)
+  }
+
+  async findById(videoId: string): Promise<Result<Video | null, Error>> {
+    this.logger.log('Finding video by ID', { videoId })
+
+    try {
+      // Fetch video
+      const videoResult = await this.select<VideoTable>({
+        table: 'video',
+        where: { video_id: videoId },
+      })
+
+      if (videoResult.isFailure) {
+        return Result.fail(videoResult.error)
+      }
+
+      const videoRows = videoResult.value
+      if (!videoRows || videoRows.length === 0) {
+        return Result.ok(null)
+      }
+
+      const videoRow = videoRows[0]
+
+      // Fetch parts
+      const partsResult = await this.select<VideoPartsTable>({
+        table: 'video_parts',
+        where: { video_id: videoId },
+      })
+
+      const partsRows = partsResult.isSuccess ? partsResult.value : []
+
+      // Reconstruct Video entity
+      const parts = (partsRows || []).map((partRow) =>
+        VideoPart.createFromDatabase({
+          videoId: UniqueEntityID.create(videoId),
+          partNumber: partRow.part_number,
+          size: partRow.size,
+          thirdPartyVideoPartId: partRow.third_party_video_part_id,
+          integration: ThirdPartyIntegration.create(),
+          url: partRow.url,
+          etag: partRow.etag,
+          uploadedAt: partRow.uploaded_at,
+          status: PartStatusVO.create(partRow.status as PartStatusType),
+        }),
+      )
+
+      const video = Video.createFromDatabase({
+        id: UniqueEntityID.create(videoId),
+        userId: UniqueEntityID.create(videoRow.user_id),
+        metadata: VideoMetadataVO.create({
+          totalSize: videoRow.total_size,
+          duration: videoRow.duration,
+        }),
+        status: VideoStatusVO.create(videoRow.status as VideoStatus),
+        parts,
+        integration: ThirdPartyIntegration.create(),
+        thirdPartyVideoIntegration:
+          VideoThirdPartyIntegrationsMetadataVO.create({
+            id: videoRow.third_party_video_id,
+            bucket: videoRow.bucket_name,
+            path: videoRow.object_key,
+          }),
+        failureReason: videoRow.failure_reason,
+      })
+
+      this.logger.log('Video found', { videoId, status: video.status.value })
+      return Result.ok(video)
+    } catch (error) {
+      this.logger.error('Failed to find video', { videoId, error })
+      return Result.fail(
+        error instanceof Error ? error : new Error(String(error)),
+      )
+    }
   }
 
   async createVideo(
@@ -106,6 +192,8 @@ export class VideoRepositoryImpl
       created_at: part.createdAt,
       updated_at: part.updatedAt,
       url: part.url,
+      etag: part.etag,
+      uploaded_at: part.uploadedAt,
     }))
     await Promise.all(
       parts.map((part) =>
@@ -145,11 +233,12 @@ export class VideoRepositoryImpl
     const result = await this.update<VideoPartsTable>({
       table: 'video_parts',
       data: {
-        created_at: video.createdAt,
         updated_at: new Date(),
         size: part.size,
         third_party_video_part_id: part.thirdPartyVideoPartId,
         status: part.status.value,
+        etag: part.etag,
+        uploaded_at: part.uploadedAt,
       },
       where: {
         video_id: video.id.value,
@@ -174,6 +263,7 @@ export class VideoRepositoryImpl
         integration_name: video.integration?.provider,
         third_party_video_id: video.thirdPartyVideoIntegration?.value.id,
         user_id: video.integration?.id.value,
+        failure_reason: video.failureReason,
       },
       where: {
         video_id: video.id.value,

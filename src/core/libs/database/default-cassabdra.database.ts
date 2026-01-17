@@ -14,6 +14,12 @@ export type UpdateEntity<T> = {
   where: Partial<T>
 }
 
+export type SelectEntity<T> = {
+  table: string
+  where: Partial<T>
+  columns?: (keyof T)[]
+}
+
 export abstract class DefaultDatabase {
   constructor(
     protected readonly datasource: DataSource,
@@ -49,6 +55,21 @@ export abstract class DefaultDatabase {
     }
   }
 
+  protected prepareSelect<T>(entity: SelectEntity<T>) {
+    this.logger.log('Preparing select', { entity })
+    const columns = entity.columns
+      ? (entity.columns as string[]).join(', ')
+      : '*'
+    const whereCols = Object.keys(entity.where)
+    const whereValues = Object.values(entity.where)
+    const whereClause = whereCols.map((c) => `${c} = ?`).join(' AND ')
+
+    return {
+      query: `SELECT ${columns} FROM ${entity.table} WHERE ${whereClause}`,
+      values: whereValues,
+    }
+  }
+
   async insert<T>(
     entity: InsertEntity<T>,
   ): Promise<Result<void, DatabaseExecutionError>> {
@@ -65,5 +86,16 @@ export abstract class DefaultDatabase {
     const { query, values } = this.prepareUpdate(entity)
     const result = await this.datasource.execute(query, values)
     return result.isSuccess ? Result.ok(undefined) : Result.fail(result.error)
+  }
+
+  async select<T>(
+    entity: SelectEntity<T>,
+  ): Promise<Result<T[], DatabaseExecutionError>> {
+    this.logger.log('Selecting entities', { entity })
+    const { query, values } = this.prepareSelect(entity)
+    const result = await this.datasource.query<T>(query, values)
+    return result.isSuccess
+      ? Result.ok(result.value)
+      : Result.fail(result.error)
   }
 }

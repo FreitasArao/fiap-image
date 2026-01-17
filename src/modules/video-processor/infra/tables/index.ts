@@ -1,13 +1,16 @@
 // CASSANDRA TABLE TYPES - Query-First Design
 // Gerado a partir de docker-compose/init-schema.cql
 
-// Status types
+// Status types - Updated to match new VideoStatusVO
 export type VideoStatus =
-  | 'pending'
-  | 'uploading'
-  | 'processing'
-  | 'completed'
-  | 'failed'
+  | 'CREATED'
+  | 'UPLOADING'
+  | 'UPLOADED'
+  | 'PROCESSING'
+  | 'SPLITTING'
+  | 'PRINTING'
+  | 'COMPLETED'
+  | 'FAILED'
 
 export type PartStatus = 'pending' | 'uploaded' | 'failed'
 
@@ -24,6 +27,7 @@ export type VideoTable = {
   third_party_video_id: string
   object_key: string
   bucket_name: string
+  failure_reason?: string
   created_at: Date
   updated_at: Date
 }
@@ -46,6 +50,8 @@ export type VideoPartsTable = {
   third_party_video_part_id: string
   url: string
   status: PartStatus
+  etag?: string
+  uploaded_at?: Date
   created_at: Date
   updated_at: Date
 }

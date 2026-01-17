@@ -150,4 +150,41 @@ export class DataSource {
       )
     }
   }
+
+  /**
+   * Executes a SELECT query and returns typed rows.
+   * @param query - The CQL query string
+   * @param params - Query parameters
+   * @returns Result containing array of typed rows
+   */
+  async query<T>(
+    query: string,
+    params: unknown[],
+  ): Promise<Result<T[], DatabaseExecutionError>> {
+    try {
+      const result = await this.client.execute(query, params, {
+        prepare: true,
+        consistency: cassandra.types.consistencies.one,
+      })
+      this.logger.log('Query executed successfully', {
+        rowCount: result.rowLength,
+      })
+      // Convert Row objects to plain objects
+      const rows = result.rows.map((row) => {
+        const obj: Record<string, unknown> = {}
+        for (const key of Object.keys(row)) {
+          obj[key] = row[key]
+        }
+        return obj as T
+      })
+      return Result.ok(rows)
+    } catch (error) {
+      this.logger.error('Error executing query', { error })
+      return Result.fail(
+        DatabaseExecutionError.create(
+          error instanceof Error ? error.message : 'Query error',
+        ),
+      )
+    }
+  }
 }

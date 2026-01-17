@@ -13,26 +13,26 @@ import {
   PartSizePolicyError,
 } from '@core/errors/part-size-policy.error'
 
-export type CreateUrlsUseCaseParams = {
+export type CreateVideoUseCaseParams = {
   totalSize: number
   duration: number
 }
 
-export type CreateUrlsUseCaseResult = {
+export type CreateVideoUseCaseResult = {
   video: Video
   uploadId: string
-  urls: string[]
+  urls: string[] // Will be empty initially
 }
 
-export class CreateUrlsUseCase {
+export class CreateVideoUseCase {
   constructor(
     private readonly videoRepository: Pick<VideoRepositoryImpl, 'createVideo'>,
     private readonly uploadVideoParts: UploadVideoParts,
   ) {}
 
   async execute(
-    params: CreateUrlsUseCaseParams,
-  ): Promise<Result<CreateUrlsUseCaseResult, Error>> {
+    params: CreateVideoUseCaseParams,
+  ): Promise<Result<CreateVideoUseCaseResult, Error>> {
     const videoId = UniqueEntityID.create().value
 
     const policy = PartSizePolicy.calculate(params.totalSize)
@@ -59,21 +59,8 @@ export class CreateUrlsUseCase {
         path: thirdPartyVideoResult.value.key,
       })
 
-    const partsUrls = await Promise.all(
-      Array.from({ length: policy.value.numberOfParts }, (_, index) =>
-        this.uploadVideoParts.createPartUploadURL({
-          key: videoId,
-          partNumber: index + 1,
-          uploadId,
-        }),
-      ),
-    )
-
-    const hasSomeError = partsUrls.some((partUrl) => partUrl.isFailure)
-    if (hasSomeError)
-      return Result.fail(new Error('Failed to create part upload URLs'))
-
-    this.createParts(policy, video, partsUrls)
+    // Create parts entities but DO NOT generate URLs yet
+    this.createParts(policy, video)
 
     const result = await this.videoRepository.createVideo(video)
     if (result.isFailure) return Result.fail(result.error)
@@ -81,7 +68,7 @@ export class CreateUrlsUseCase {
     return Result.ok({
       video,
       uploadId,
-      urls: video.getPartsUrls(),
+      urls: [], // No URLs generated at creation time
     })
   }
 
@@ -90,10 +77,12 @@ export class CreateUrlsUseCase {
     video: Video & { integration: ThirdPartyIntegration } & {
       thirdPartyVideoIntegration: VideoThirdPartyIntegrationsMetadataVO
     },
-    partsUrls: Result<{ url: string }, Error>[],
   ) {
     let numberOfPartsToCreate = policy.value.numberOfParts
 
+    // Removed the MAX_PARTS limitation here for now, or keep it consistent?
+    // If we have very large videos, we might want to cap it.
+    // Preserving existing logic:
     if (
       PartSizePolicy.numberOfPartsIsLargeThanPageSize(
         policy.value.numberOfParts,
@@ -109,7 +98,7 @@ export class CreateUrlsUseCase {
           partNumber: i + 1,
           size: policy.value.partSize,
           integration: video.integration,
-          url: partsUrls[i].value.url,
+          url: '', // Initialize with empty URL
         }),
       )
     }

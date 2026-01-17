@@ -5,6 +5,7 @@ import {
   type LogExtra,
   type LogLevel,
 } from '@core/libs/logging/abstract-logger'
+import { SensitiveDataMasker } from '@core/libs/logging/sensitive-masker'
 
 import { type Context, trace as otelTrace } from '@opentelemetry/api'
 import pino, { type Logger as PinoBaseLogger } from 'pino'
@@ -50,9 +51,12 @@ export class PinoLoggerService extends AbstractLoggerService<pino.Level> {
   protected _handle(level: LogLevel, message: string, extra: LogExtra): void {
     const handleLevel = this.getLogLevel()[level]
 
+    // Mask sensitive data before logging
+    const maskedExtra = SensitiveDataMasker.mask(extra)
+
     const base: BaseLogMeta = {
       context: this._context,
-      extra,
+      extra: maskedExtra,
     }
 
     this.logger[handleLevel](base, message)

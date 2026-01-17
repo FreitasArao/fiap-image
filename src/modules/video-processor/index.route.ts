@@ -1,5 +1,5 @@
 import { BaseElysia } from '@core/libs/elysia'
-import { CreateUrlsUseCase } from '@modules/video-processor/application/create-urls.use-case'
+import { CreateVideoUseCase } from '@modules/video-processor/application/create-video.use-case'
 import { VideoRepositoryImpl } from '@modules/video-processor/infra/repositories/video-repository-impl'
 import { UploadVideoParts } from '@modules/video-processor/infra/services/aws/s3/upload-video-parts'
 import { VideoProcessorController } from '@modules/video-processor/presentation/video-processor.controller'
@@ -15,7 +15,7 @@ export const videoProcessorRoute = BaseElysia.create({
 
       const videoProcessorController = new VideoProcessorController(
         logger,
-        new CreateUrlsUseCase(
+        new CreateVideoUseCase(
           new VideoRepositoryImpl(logger),
           new UploadVideoParts(logger),
         ),

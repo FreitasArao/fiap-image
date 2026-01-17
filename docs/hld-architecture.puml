@@ -1,0 +1,170 @@
+@startuml HLD-Architecture
+!define AWSPuml https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v18.0/dist
+!include AWSPuml/AWSCommon.puml
+!include AWSPuml/AWSSimplified.puml
+!include AWSPuml/General/Users.puml
+!include AWSPuml/SecurityIdentityCompliance/Cognito.puml
+!include AWSPuml/NetworkingContentDelivery/APIGateway.puml
+!include AWSPuml/Storage/SimpleStorageService.puml
+!include AWSPuml/ApplicationIntegration/EventBridge.puml
+!include AWSPuml/ApplicationIntegration/SimpleQueueService.puml
+!include AWSPuml/ApplicationIntegration/SimpleNotificationService.puml
+!include AWSPuml/Compute/Lambda.puml
+!include AWSPuml/Database/Database.puml
+!include AWSPuml/Containers/ElasticKubernetesService.puml
+
+' Layout
+left to right direction
+skinparam linetype ortho
+skinparam backgroundColor #FFFFFF
+skinparam defaultTextAlignment center
+
+title Processamento de Vídeo - Arquitetura AWS\n\n
+
+' ============================================
+' CAMADA 1: CLIENTE
+' ============================================
+rectangle "**Cliente**" as client_layer #E8F4FD {
+    Users(user, "Usuário", "Web/Mobile")
+}
+
+' ============================================
+' CAMADA 2: AUTENTICAÇÃO
+' ============================================
+rectangle "**Autenticação**" as auth_layer #E8F8E8 {
+    APIGateway(apigw, "API Gateway", "JWT Authorizer")
+    Cognito(cognito, "Cognito", "OTP Email")
+}
+
+' ============================================
+' CAMADA 3: API
+' ============================================
+rectangle "**FIAPX API**" as api_layer #FFF8E8 {
+    rectangle "Endpoints" {
+        component "POST /videos" as ep1
+        component "GET /upload-urls" as ep2
+        component "POST /parts/{n}" as ep3
+        component "POST /complete" as ep4
+    }
+}
+
+' ============================================
+' CAMADA 4: STORAGE
+' ============================================
+rectangle "**Storage**" as storage_layer #FFE8D0 {
+    SimpleStorageService(s3videos, "S3 Videos", "Vídeos originais")
+    SimpleStorageService(s3frames, "S3 Frames", "Frames extraídos")
+}
+
+' ============================================
+' CAMADA 5: EVENTOS
+' ============================================
+rectangle "**Event-Driven**" as events_layer #F0E8FF {
+    EventBridge(eb, "EventBridge", "Roteamento S3")
+    SimpleQueueService(sqsSplit, "SQS Split", "Fila divisão")
+    SimpleQueueService(sqsPrint, "SQS Print", "Fila frames")
+    SimpleQueueService(sqsDlq, "SQS DLQ", "Dead Letter")
+}
+
+' ============================================
+' CAMADA 6: PROCESSAMENTO
+' ============================================
+rectangle "**Kubernetes**" as k8s_layer #E8E8E8 {
+    ElasticKubernetesService(eks, "EKS", "Cluster")
+    rectangle "KEDA Workers" {
+        component "Split Worker" as splitW
+        component "Print Worker" as printW
+    }
+    rectangle "Jobs" {
+        component "FFmpeg Split" as jobS
+        component "FFmpeg Print" as jobP
+    }
+}
+
+' ============================================
+' CAMADA 7: NOTIFICAÇÕES
+' ============================================
+rectangle "**Notificações**" as notify_layer #E8FFFF {
+    SimpleNotificationService(sns, "SNS", "Fanout")
+    Lambda(lambdaEmail, "Lambda", "Email")
+    Lambda(lambdaSms, "Lambda", "SMS")
+}
+
+' ============================================
+' DATABASE
+' ============================================
+rectangle "**Database**" as db_layer #FFF0E8 {
+    Database(cassandra, "Cassandra", "RF=3, QUORUM")
+}
+
+' ============================================
+' CONEXÕES - FLUXO PRINCIPAL
+' ============================================
+
+' Auth
+user --> apigw : "0. JWT"
+apigw --> cognito
+
+' API
+user --> ep1 : "1. Criar"
+user --> ep2 : "2. URLs"
+user --> ep3 : "4. ETag"
+user --> ep4 : "5. Complete"
+
+' Storage
+ep1 --> s3videos : "CreateMultipart"
+ep2 --> s3videos : "Presigned"
+user --> s3videos : "3. Upload"
+ep4 --> s3videos : "Complete"
+
+' Events
+s3videos --> eb : "6. Event"
+eb --> sqsSplit
+sqsSplit --> sqsDlq : "Falha"
+
+' Processing
+sqsSplit --> splitW : "7. Poll"
+splitW --> jobS
+jobS --> s3videos : "Download"
+jobS --> sqsPrint : "Segmentos"
+
+sqsPrint --> printW : "8. Poll"
+printW --> jobP
+jobP --> s3frames : "Frames"
+sqsPrint --> sqsDlq : "Falha"
+
+' Notifications
+s3frames --> eb : "9. Event"
+eb --> sns
+sns --> lambdaEmail : "10. Email"
+sns --> lambdaSms : "SMS"
+
+' Database
+ep1 --> cassandra : "CREATED"
+ep2 --> cassandra : "UPLOADING"
+ep3 --> cassandra : "Parte OK"
+ep4 --> cassandra : "UPLOADED"
+jobS --> cassandra : "SPLITTING"
+jobP --> cassandra : "COMPLETED"
+
+' ============================================
+' NOTAS
+' ============================================
+note bottom of s3videos
+  **LIMITAÇÃO S3**
+  Não emite eventos
+  para UploadPart.
+
+  Apenas Complete
+  gera evento.
+end note
+
+note bottom of eb
+  **RECONCILIAÇÃO**
+  Se evento chegou,
+  upload está 100% OK.
+  Marca todas partes
+  como UPLOADED.
+end note
+
+@enduml

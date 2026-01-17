@@ -7,48 +7,131 @@ export type CreateVideoPartParams = {
   videoId: UniqueEntityID
   partNumber: number
   size: number
-  thirdPartyVideoPartId: string
+  thirdPartyVideoPartId?: string
   integration: ThirdPartyIntegration
   url: string
+  etag?: string
+  uploadedAt?: Date
+  status?: PartStatusVO
 }
 
+/**
+ * Represents a single part of a multipart video upload.
+ * Tracks upload status, ETag (returned after S3 upload), and upload timestamp.
+ */
 export class VideoPart extends DefaultEntity {
   readonly videoId: UniqueEntityID
   readonly partNumber: number
   readonly size: number
   readonly thirdPartyVideoPartId: string
   readonly integration: ThirdPartyIntegration
-  readonly status: PartStatusVO = PartStatusVO.create('pending')
+  private _status: PartStatusVO
   readonly url: string
+  private _etag: string | undefined
+  private _uploadedAt: Date | undefined
 
-  private constructor({
-    videoId,
-    partNumber,
-    size,
-    thirdPartyVideoPartId,
-    integration,
-    url,
-  }: CreateVideoPartParams) {
+  private constructor(params: CreateVideoPartParams) {
     super(UniqueEntityID.create())
-    this.videoId = videoId
-    this.partNumber = partNumber
-    this.size = size
-    this.thirdPartyVideoPartId = thirdPartyVideoPartId
-    this.integration = integration
-    this.url = url
+    this.videoId = params.videoId
+    this.partNumber = params.partNumber
+    this.size = params.size
+    this.thirdPartyVideoPartId = params.thirdPartyVideoPartId ?? ''
+    this.integration = params.integration
+    this._status = params.status ?? PartStatusVO.create('pending')
+    this.url = params.url
+    this._etag = params.etag
+    this._uploadedAt = params.uploadedAt
   }
 
-  static create(props: Omit<CreateVideoPartParams, 'thirdPartyVideoPartId'>) {
+  get status(): PartStatusVO {
+    return this._status
+  }
+
+  get etag(): string | undefined {
+    return this._etag
+  }
+
+  get uploadedAt(): Date | undefined {
+    return this._uploadedAt
+  }
+
+  /**
+   * Checks if this part has been uploaded successfully.
+   */
+  isUploaded(): boolean {
+    return this._status.value === 'uploaded' && this._etag !== undefined
+  }
+
+  /**
+   * Checks if this part is pending upload.
+   */
+  isPending(): boolean {
+    return this._status.value === 'pending'
+  }
+
+  /**
+   * Marks this part as uploaded with the ETag from S3.
+   * @param etag - The ETag returned by S3 after successful upload
+   */
+  markAsUploaded(etag: string): this {
+    this._etag = etag
+    this._uploadedAt = new Date()
+    this._status = PartStatusVO.create('uploaded')
+    return this
+  }
+
+  /**
+   * Marks this part as failed.
+   */
+  markAsFailed(): this {
+    this._status = PartStatusVO.create('failed')
+    return this
+  }
+
+  static create(
+    props: Omit<
+      CreateVideoPartParams,
+      'thirdPartyVideoPartId' | 'etag' | 'uploadedAt' | 'status'
+    >,
+  ): VideoPart {
     return new VideoPart({
       ...props,
       thirdPartyVideoPartId: '',
     })
   }
 
-  static addExternalPartId(part: VideoPart, thirdPartyVideoPartId: string) {
+  static createFromDatabase(props: CreateVideoPartParams): VideoPart {
+    return new VideoPart(props)
+  }
+
+  static addExternalPartId(
+    part: VideoPart,
+    thirdPartyVideoPartId: string,
+  ): VideoPart {
     return new VideoPart({
-      ...part,
+      videoId: part.videoId,
+      partNumber: part.partNumber,
+      size: part.size,
       thirdPartyVideoPartId,
+      integration: part.integration,
+      url: part.url,
+      etag: part.etag,
+      uploadedAt: part.uploadedAt,
+      status: part.status,
+    })
+  }
+
+  static assignUrl(part: VideoPart, url: string): VideoPart {
+    return new VideoPart({
+      videoId: part.videoId,
+      partNumber: part.partNumber,
+      size: part.size,
+      thirdPartyVideoPartId: part.thirdPartyVideoPartId,
+      integration: part.integration,
+      url: url,
+      etag: part.etag,
+      uploadedAt: part.uploadedAt,
+      status: part.status,
     })
   }
 }

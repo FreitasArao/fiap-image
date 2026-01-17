@@ -1,223 +1,131 @@
 @startuml HLD-Flow
 !include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
 !include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
-!theme C4_brown from https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/themes
 
-LAYOUT_TOP_DOWN()
+LAYOUT_LEFT_RIGHT()
+HIDE_STEREOTYPE()
 
-title Processamento de Vídeo - Arquitetura Final (EventBridge + SQS + KEDA)
+title Processamento de Vídeo - Arquitetura Final\n(EventBridge + SQS + KEDA)
 
 ' =====================================
-' FRONTEND
+' LEGENDA
 ' =====================================
-System_Boundary(frontend, "Frontend") {
-    Person(user, "Usuário", "Envia e processa vídeos")
+legend right
+  |= Cor |= Tipo |
+  | <#438DD5> | AWS Services |
+  | <#1168BD> | API / Backend |
+  | <#999999> | Kubernetes |
+  | <#FF9900> | Banco de Dados |
+endlegend
+
+' =====================================
+' ACTORS
+' =====================================
+Person(user, "Usuário", "Envia vídeos para processamento")
+
+' =====================================
+' FASE 1: AUTENTICAÇÃO
+' =====================================
+System_Boundary(auth, "1. Autenticação") {
+    Container(cognito, "Cognito", "AWS", "Auth OTP")
 }
 
 ' =====================================
-' AUTH (FORA DA APLICAÇÃO)
+' FASE 2: API
 ' =====================================
-System_Boundary(auth, "AWS Auth") {
-    Container_Ext(apiGateway, "API Gateway", "AWS", "Gateway público + JWT Authorizer")
-    Container_Ext(cognito, "Cognito User Pool", "AWS", "Auth OTP por email")
-
-    Container_Ext(lambdaDefine, "Lambda DefineAuth", "Lambda", "Controla desafio")
-    Container_Ext(lambdaCreate, "Lambda CreateAuth", "Lambda", "Gera e envia OTP")
-    Container_Ext(lambdaVerify, "Lambda VerifyAuth", "Lambda", "Valida OTP")
+System_Boundary(api, "2. FIAPX API") {
+    Container(apiVideos, "POST /videos", "Elysia", "Cria vídeo")
+    Container(apiUrls, "GET /upload-urls", "Elysia", "Batch 20 URLs")
+    Container(apiParts, "POST /parts/{n}", "Elysia", "Reporta ETag")
+    Container(apiComplete, "POST /complete", "Elysia", "Finaliza upload")
 }
 
 ' =====================================
-' API FIAPX
+' FASE 3: STORAGE
 ' =====================================
-Enterprise_Boundary(fiapx, "FIAPX API") {
-    Container(createVideo, "POST /videos", "API", "Cria vídeo + uploadId\nStatus: CREATED")
-    Container(getUploadURLs, "GET /videos/{id}/upload-urls", "API", "Retorna batch de 20 URLs\nPaginação progressiva")
-    Container(reportPart, "POST /videos/{id}/parts/{n}", "API", "Cliente reporta ETag\nAtualiza progresso")
-    Container(getProgress, "GET /videos/{id}/progress", "API", "Consulta progresso\nQuantas partes enviadas")
-    Container(completeUpload, "POST /videos/{id}/complete", "API", "Finaliza multipart\nStatus: UPLOADED")
-    Container(printCompleted, "POST /videos/{id}/print-completed", "API", "Notifica conclusão\nStatus: COMPLETED")
+System_Boundary(storage, "3. Storage") {
+    ContainerDb(s3Videos, "S3 Videos", "S3", "Vídeos originais")
+    ContainerDb(s3Frames, "S3 Frames", "S3", "Frames extraídos")
 }
 
 ' =====================================
-' AWS S3
+' FASE 4: EVENTOS
 ' =====================================
-System_Boundary(awsS3, "AWS S3") {
-    Container_Ext(s3Bucket, "S3 Videos Bucket", "S3", "Armazena vídeos")
-    Container_Ext(s3Images, "S3 Images Bucket", "S3", "Armazena frames/prints")
+System_Boundary(events, "4. Event Bus") {
+    Container(eventbridge, "EventBridge", "AWS", "Roteamento")
+    ContainerQueue(sqsSplit, "SQS Split", "SQS", "Fila split")
+    ContainerQueue(sqsPrint, "SQS Print", "SQS", "Fila print")
 }
 
 ' =====================================
-' AWS EVENTBRIDGE + SQS
+' FASE 5: PROCESSAMENTO
 ' =====================================
-System_Boundary(awsEvents, "AWS EventBridge") {
-    Container_Ext(eventBridge, "EventBridge", "Events", "Roteamento de eventos S3")
-    Container_Ext(ruleComplete, "Rule: CompleteMultipart", "Rule", "Detecta upload finalizado\n(único evento disponível)")
-    Container_Ext(rulePrintDone, "Rule: PrintDone", "Rule", "Detecta frames salvos")
-}
-
-System_Boundary(awsSQS, "AWS SQS") {
-    SystemQueue(sqsSplitVideo, "SQS Split Queue", "Fila de divisão de vídeo")
-    SystemQueue(sqsPrintVideo, "SQS Print Queue", "Fila de extração de frames")
-    SystemQueue(sqsDLQ, "SQS DLQ", "Dead Letter Queue")
+System_Boundary(processing, "5. Kubernetes") {
+    Container(kedaSplit, "Split Worker", "KEDA", "Consome SQS")
+    Container(kedaPrint, "Print Worker", "KEDA", "Consome SQS")
+    Container(jobSplit, "FFmpeg Split", "Job", "Divide vídeo")
+    Container(jobPrint, "FFmpeg Print", "Job", "Extrai frames")
 }
 
 ' =====================================
-' AWS SNS + LAMBDA (NOTIFICAÇÕES)
+' FASE 6: NOTIFICAÇÃO
 ' =====================================
-System_Boundary(awsSNS, "AWS SNS") {
-    Container_Ext(snsPrintCompleted, "SNS Print Completed", "Topic", "Fanout de notificações")
-}
-
-System_Boundary(awsLambda, "AWS Lambda (Notificações)") {
-    Container_Ext(lambdaEmail, "Lambda Email", "Lambda ARM", "Envia email via SES\n128MB, ~200ms")
-    Container_Ext(lambdaSMS, "Lambda SMS", "Lambda ARM", "Envia SMS via SNS\n128MB, ~200ms")
-}
-
-' =====================================
-' KUBERNETES (PROCESSAMENTO PESADO)
-' =====================================
-System_Boundary(k8s, "Kubernetes Cluster") {
-    Container_Boundary(workers, "KEDA Workers") {
-        Container_Ext(splitWorker, "Split Worker", "KEDA", "Escala com SQS Split\nConsome mensagens")
-        Container_Ext(printWorker, "Print Worker", "KEDA", "Escala com SQS Print\nConsome mensagens")
-    }
-    Container_Boundary(jobs, "K8s Jobs") {
-        Container_Ext(jobSplit, "FFmpeg Split Job", "K8s Job", "Divide vídeo em segmentos\n~20s por segmento")
-        Container_Ext(jobPrint, "FFmpeg Print Job", "K8s Job", "Extrai frames\n~20s por segmento")
-    }
+System_Boundary(notify, "6. Notificações") {
+    Container(sns, "SNS", "AWS", "Fanout")
+    Container(lambdaEmail, "Lambda Email", "Lambda", "Envia email")
+    Container(lambdaSms, "Lambda SMS", "Lambda", "Envia SMS")
 }
 
 ' =====================================
 ' DATABASE
 ' =====================================
-System_Boundary(database, "Database") {
-    SystemDb_Ext(db, "Cassandra", "Status do vídeo\nRF=3, QUORUM write")
-}
+ContainerDb(cassandra, "Cassandra", "DB", "Status vídeo")
 
 ' =====================================
-' FLUXO 0: AUTENTICAÇÃO OTP
+' FLUXOS PRINCIPAIS
 ' =====================================
-Rel(user, apiGateway, "0. POST /auth/login")
-Rel(apiGateway, cognito, "Inicia Custom Auth")
-Rel(cognito, lambdaDefine, "DefineAuthChallenge")
-Rel(cognito, lambdaCreate, "CreateAuthChallenge")
-Rel(user, apiGateway, "Envia código OTP")
-Rel(cognito, lambdaVerify, "VerifyAuthChallenge")
-Rel(cognito, user, "Retorna JWT")
 
-' =====================================
-' FLUXO 1: CRIAÇÃO DO VÍDEO
-' =====================================
-Rel(user, createVideo, "1. POST /videos", "JWT + {totalSize, duration}")
-Rel(createVideo, s3Bucket, "CreateMultipartUpload")
-Rel(createVideo, db, "Salva vídeo (CREATED)")
+' Auth
+Rel(user, cognito, "0. Login OTP")
+Rel(cognito, user, "JWT")
 
-' =====================================
-' FLUXO 2: GERAÇÃO PROGRESSIVA DE URLs
-' =====================================
-Rel(user, getUploadURLs, "2. GET /upload-urls?start=1&limit=20", "JWT")
-Rel(getUploadURLs, s3Bucket, "getSignedUrl (batch 20)")
-Rel(getUploadURLs, db, "Status: UPLOADING")
+' Upload Flow
+Rel(user, apiVideos, "1. Cria vídeo")
+Rel(apiVideos, s3Videos, "CreateMultipartUpload")
+Rel(apiVideos, cassandra, "CREATED")
 
-' =====================================
-' FLUXO 3: UPLOAD DAS PARTES (DIRETO S3)
-' =====================================
-Rel(user, s3Bucket, "3. PUT presigned URL", "Upload paralelo")
+Rel(user, apiUrls, "2. Solicita URLs")
+Rel(apiUrls, s3Videos, "getSignedUrl")
+Rel(apiUrls, cassandra, "UPLOADING")
 
-' =====================================
-' FLUXO 4: CLIENTE REPORTA PROGRESSO
-' (S3 NÃO emite eventos para UploadPart!)
-' =====================================
-Rel(user, reportPart, "4. POST /parts/{n}", "JWT + {etag}")
-Rel(reportPart, db, "Atualiza parte (UPLOADING)")
+Rel(user, s3Videos, "3. Upload partes")
+Rel(user, apiParts, "4. Reporta ETag")
+Rel(apiParts, cassandra, "Atualiza parte")
 
-' =====================================
-' FLUXO 5: CONSULTA DE PROGRESSO (OPCIONAL)
-' =====================================
-Rel(user, getProgress, "5. GET /progress (polling)", "JWT")
-Rel(getProgress, db, "Lê progresso")
+Rel(user, apiComplete, "5. Finaliza")
+Rel(apiComplete, s3Videos, "CompleteMultipart")
 
-' =====================================
-' FLUXO 6: FINALIZAÇÃO DO UPLOAD
-' =====================================
-Rel(user, completeUpload, "6. POST /complete", "JWT + [{part, etag}]")
-Rel(completeUpload, s3Bucket, "CompleteMultipartUpload")
-Rel(completeUpload, db, "Status: UPLOADED")
+' Event Flow
+Rel(s3Videos, eventbridge, "6. Object Created")
+Rel(eventbridge, sqsSplit, "Publica")
 
-' =====================================
-' FLUXO 7: EVENTBRIDGE DETECTA CONCLUSÃO
-' (Único evento S3 para multipart!)
-' RECONCILIAÇÃO: Atualiza todas as partes
-' =====================================
-Rel(s3Bucket, eventBridge, "7. Object Created\n(CompleteMultipartUpload)")
-Rel(eventBridge, ruleComplete, "Match")
-Rel(ruleComplete, completeUpload, "API Destination\n(reconcilia partes)")
-Rel(completeUpload, db, "Marca TODAS partes\n+ vídeo como UPLOADED")
-Rel(completeUpload, sqsSplitVideo, "Publica na fila")
+' Processing Flow
+Rel(sqsSplit, kedaSplit, "7. Poll")
+Rel(kedaSplit, jobSplit, "Cria Job")
+Rel(jobSplit, s3Videos, "Download")
+Rel(jobSplit, sqsPrint, "Segmentos")
+Rel(jobSplit, cassandra, "SPLITTING")
 
-' =====================================
-' FLUXO 8: SPLIT DO VÍDEO (KEDA)
-' =====================================
-Rel(sqsSplitVideo, splitWorker, "8. Poll SQS")
-Rel(splitWorker, jobSplit, "Cria Job")
-Rel(jobSplit, s3Bucket, "Download segmento")
-Rel(jobSplit, sqsPrintVideo, "Publica segmentos")
-Rel(jobSplit, db, "Status: SPLITTING")
+Rel(sqsPrint, kedaPrint, "8. Poll")
+Rel(kedaPrint, jobPrint, "Cria Job")
+Rel(jobPrint, s3Frames, "Salva frames")
+Rel(jobPrint, cassandra, "PRINTING")
 
-' =====================================
-' FLUXO 9: PRINT DOS FRAMES (KEDA)
-' =====================================
-Rel(sqsPrintVideo, printWorker, "9. Poll SQS")
-Rel(printWorker, jobPrint, "Cria Job")
-Rel(jobPrint, s3Images, "Salva frames")
-Rel(jobPrint, db, "Status: PRINTING")
-
-' =====================================
-' FLUXO 10: NOTIFICAÇÃO (LAMBDA)
-' =====================================
-Rel(s3Images, eventBridge, "10. Object Created\n(frames salvos)")
-Rel(eventBridge, rulePrintDone, "Match último frame")
-Rel(rulePrintDone, printCompleted, "API Destination")
-Rel(printCompleted, db, "Status: COMPLETED")
-Rel(printCompleted, snsPrintCompleted, "Publica evento")
-
-' =====================================
-' FLUXO 11: FANOUT LAMBDA
-' =====================================
-Rel(snsPrintCompleted, lambdaEmail, "11. Invoke")
-Rel(snsPrintCompleted, lambdaSMS, "Invoke")
-
-' =====================================
-' DLQ (FALHAS)
-' =====================================
-Rel(sqsSplitVideo, sqsDLQ, "Falha após retries")
-Rel(sqsPrintVideo, sqsDLQ, "Falha após retries")
-
-' =====================================
-' NOTAS IMPORTANTES
-' =====================================
-note right of s3Bucket
-  **LIMITAÇÃO S3**:
-  S3 NÃO emite eventos
-  para UploadPart!
-
-  Apenas CompleteMultipartUpload
-  gera evento no EventBridge.
-
-  Por isso o cliente deve
-  reportar progresso via API.
-end note
-
-note right of completeUpload
-  **RECONCILIAÇÃO**:
-  Se CompleteMultipartUpload
-  chegou, o upload está 100%
-  completo no S3.
-
-  Mesmo que cliente não tenha
-  reportado todas as partes,
-  o sistema marca TODAS como
-  UPLOADED (fonte de verdade).
-end note
+' Notification Flow
+Rel(s3Frames, eventbridge, "9. Frames OK")
+Rel(eventbridge, sns, "Publica")
+Rel(sns, lambdaEmail, "10. Invoke")
+Rel(sns, lambdaSms, "Invoke")
+Rel_Back(cassandra, apiComplete, "COMPLETED")
 
 @enduml
