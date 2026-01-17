@@ -1,7 +1,5 @@
-import { DatabaseExecutionError } from '@core/errors/database.error'
 import { BaseElysia } from '@core/libs/elysia'
 import { CreateUrlsUseCase } from '@modules/video-processor/application/create-urls.use-case'
-import { CreateVideoUseCase } from '@modules/video-processor/application/create-video.use-case'
 import { VideoRepositoryImpl } from '@modules/video-processor/infra/repositories/video-repository-impl'
 import { UploadVideoParts } from '@modules/video-processor/infra/services/aws/s3/upload-video-parts'
 import { VideoProcessorController } from '@modules/video-processor/presentation/video-processor.controller'
@@ -12,47 +10,41 @@ export const videoProcessorRoute = BaseElysia.create({
 })
   .post(
     '/',
-    async ({ logger, set }) => {
-      const videoRepository = new VideoRepositoryImpl(logger)
-      const uploadVideoParts = new UploadVideoParts(logger)
-      const createVideoUseCase = new CreateVideoUseCase(
-        videoRepository,
-        uploadVideoParts,
-      )
-      const createUrlsUseCase = new CreateUrlsUseCase(
-        new UploadVideoParts(logger),
-      )
+    async ({ body, logger, set }) => {
+      const { totalSize, duration } = body
 
-      const controller = new VideoProcessorController(
+      const videoProcessorController = new VideoProcessorController(
         logger,
-        createVideoUseCase,
-        createUrlsUseCase,
+        new CreateUrlsUseCase(
+          new VideoRepositoryImpl(logger),
+          new UploadVideoParts(logger),
+        ),
       )
 
-      const response = await controller.create()
+      const result = await videoProcessorController.create({
+        totalSize,
+        duration,
+      })
 
-      if (response.isFailure) {
+      if (result.isFailure) {
         set.status = StatusMap['Unprocessable Content']
-        return { message: response.error.message }
+        return { message: result.error.message }
       }
 
-      if (
-        response.isFailure &&
-        response.error instanceof DatabaseExecutionError
-      ) {
-        set.status = StatusMap['Unprocessable Content']
-        return { message: 'Error creating video processor' }
+      const videoPath =
+        result.value.video.thirdPartyVideoIntegration?.value.path
+
+      if (!videoPath) {
+        set.status = StatusMap['Bad Request']
+        return { message: 'Erro on creating video path' }
       }
 
-      if (response.isFailure && response.error instanceof Error) {
-        set.status = StatusMap['Internal Server Error']
-        return { message: response.error.message }
-      }
-
-      set.status = 200
       return {
-        message: 'Video processor created successfully',
-        urls: response.value,
+        message: 'Video created successfully',
+        videoId: result.value.video.id.value,
+        uploadId: result.value.uploadId,
+        urls: result.value.urls,
+        videoPath,
       }
     },
     {
@@ -62,12 +54,27 @@ export const videoProcessorRoute = BaseElysia.create({
         description:
           'Cria um novo video no sistema e retorna as presigned URLs para upload das partes via multipart upload do S3',
       },
+      body: t.Object({
+        totalSize: t.Number({ description: 'Tamanho total do video em bytes' }),
+        duration: t.Number({ description: 'Duracao do video em segundos' }),
+      }),
       response: {
         200: t.Object({
           message: t.String(),
-          urls: t.Array(t.String()),
+          videoId: t.String({ description: 'ID do video criado' }),
+          uploadId: t.String({ description: 'ID do multipart upload no S3' }),
+          urls: t.Array(t.String(), {
+            description: 'Presigned URLs para upload das partes',
+          }),
+          videoPath: t.String({ description: 'Path do video no S3' }),
         }),
         422: t.Object({
+          message: t.String(),
+        }),
+        400: t.Object({
+          message: t.String(),
+        }),
+        500: t.Object({
           message: t.String(),
         }),
       },

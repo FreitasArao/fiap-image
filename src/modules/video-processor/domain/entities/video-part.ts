@@ -9,6 +9,7 @@ export type CreateVideoPartParams = {
   size: number
   thirdPartyVideoPartId: string
   integration: ThirdPartyIntegration
+  url: string
 }
 
 export class VideoPart extends DefaultEntity {
@@ -18,6 +19,7 @@ export class VideoPart extends DefaultEntity {
   readonly thirdPartyVideoPartId: string
   readonly integration: ThirdPartyIntegration
   readonly status: PartStatusVO = PartStatusVO.create('pending')
+  readonly url: string
 
   private constructor({
     videoId,
@@ -25,6 +27,7 @@ export class VideoPart extends DefaultEntity {
     size,
     thirdPartyVideoPartId,
     integration,
+    url,
   }: CreateVideoPartParams) {
     super(UniqueEntityID.create())
     this.videoId = videoId
@@ -32,9 +35,20 @@ export class VideoPart extends DefaultEntity {
     this.size = size
     this.thirdPartyVideoPartId = thirdPartyVideoPartId
     this.integration = integration
+    this.url = url
   }
 
-  static create(props: CreateVideoPartParams) {
-    return new VideoPart(props)
+  static create(props: Omit<CreateVideoPartParams, 'thirdPartyVideoPartId'>) {
+    return new VideoPart({
+      ...props,
+      thirdPartyVideoPartId: '',
+    })
+  }
+
+  static addExternalPartId(part: VideoPart, thirdPartyVideoPartId: string) {
+    return new VideoPart({
+      ...part,
+      thirdPartyVideoPartId,
+    })
   }
 }

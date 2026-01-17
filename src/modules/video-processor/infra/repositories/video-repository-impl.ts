@@ -52,13 +52,15 @@ export class VideoRepositoryImpl
           bucket_name: video.thirdPartyVideoIntegration.value.bucket,
           object_key: video.thirdPartyVideoIntegration.value.path,
           video_id: video.id.value,
-          user_id: video.integration.id.value,
+          user_id: video.userId.value,
           status: video.status.value,
           total_size: video.metadata.value.totalSize,
           duration: video.metadata.value.duration,
           parts_count: video.parts.length,
           integration_name: video.integration.provider,
           third_party_video_id: video.thirdPartyVideoIntegration.value.id,
+          created_at: video.createdAt,
+          updated_at: video.updatedAt,
         },
       }),
       this.createVideoByUser({
@@ -72,6 +74,7 @@ export class VideoRepositoryImpl
         third_party_video_id: video.thirdPartyVideoIntegration.value.id,
         video_id: video.id.value,
       }),
+      this.createVideoParts(video),
     ])
     this.logger.log('Video created and synched with user', {
       video: video.id.value,
@@ -90,7 +93,7 @@ export class VideoRepositoryImpl
     return result.isSuccess ? Result.ok(undefined) : Result.fail(result.error)
   }
 
-  async createVideoPart(
+  async createVideoParts(
     video: Video,
   ): Promise<Result<void, DatabaseExecutionError>> {
     this.logger.log('Creating video part', { video: video.id.value })
@@ -102,6 +105,7 @@ export class VideoRepositoryImpl
       status: part.status.value,
       created_at: part.createdAt,
       updated_at: part.updatedAt,
+      url: part.url,
     }))
     await Promise.all(
       parts.map((part) =>

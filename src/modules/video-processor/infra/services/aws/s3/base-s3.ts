@@ -50,7 +50,7 @@ export abstract class BaseS3Service {
 
   async startMultipartUpload(
     key: string,
-  ): Promise<Result<{ uploadId: string }, Error>> {
+  ): Promise<Result<{ uploadId: string; key: string }, Error>> {
     this.logger.log('Starting multipart upload to S3', {
       key,
       bucket: this.bucketName,

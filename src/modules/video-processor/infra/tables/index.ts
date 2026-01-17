@@ -44,6 +44,7 @@ export type VideoPartsTable = {
   part_number: number
   size: number
   third_party_video_part_id: string
+  url: string
   status: PartStatus
   created_at: Date
   updated_at: Date

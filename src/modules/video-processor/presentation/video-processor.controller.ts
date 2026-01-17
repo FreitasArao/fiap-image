@@ -1,37 +1,46 @@
 import { Result } from '@core/domain/result'
 import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
-import { CreateUrlsUseCase } from '@modules/video-processor/application/create-urls.use-case'
-import { CreateVideoUseCase } from '@modules/video-processor/application/create-video.use-case'
+import {
+  CreateUrlsUseCase,
+  CreateUrlsUseCaseResult,
+} from '@modules/video-processor/application/create-urls.use-case'
+
+export type CreateVideoParams = {
+  totalSize: number
+  duration: number
+}
 
 export class VideoProcessorController {
   constructor(
     private readonly logger: AbstractLoggerService,
-    private readonly createVideoUseCase: CreateVideoUseCase,
     private readonly createUrlsUseCase: CreateUrlsUseCase,
   ) {}
-  async create(): Promise<Result<string[], Error>> {
-    this.logger.log('Creating video processor')
 
-    const video = await this.createVideoUseCase.execute({
-      totalSize: 40_000_000, // 40MB
-      duration: 1000, // 1s
+  async create(
+    params: CreateVideoParams,
+  ): Promise<Result<CreateUrlsUseCaseResult, Error>> {
+    this.logger.log('Creating video and generating upload URLs', {
+      totalSize: params.totalSize,
+      duration: params.duration,
     })
 
-    if (video.isFailure) return Result.fail(video.error)
-
-    const videoResult = video.value
-
-    if (!videoResult) return Result.fail(new Error('Video not found'))
-
-    const urls = await this.createUrlsUseCase.execute({
-      videoId: videoResult.video.id,
-      totalSize: videoResult.video.totalSize,
-      duration: videoResult.video.duration,
-      uploadId: videoResult.uploadId,
+    const result = await this.createUrlsUseCase.execute({
+      totalSize: params.totalSize,
+      duration: params.duration,
     })
 
-    if (urls.isFailure) return Result.fail(urls.error)
+    if (result.isFailure) {
+      this.logger.error('Failed to create video', { error: result.error })
+      return Result.fail(result.error)
+    }
 
-    return Result.ok(urls.value)
+    this.logger.log('Video created successfully', {
+      videoId: result.value.video.id,
+      uploadId: result.value.uploadId,
+      urlsCount: result.value.urls.length,
+      videoPath: result.value.video.thirdPartyVideoIntegration?.value.path,
+    })
+
+    return Result.ok(result.value)
   }
 }

@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS video_parts (
   part_number INT,
   size BIGINT,
   third_party_video_part_id TEXT,
+  url TEXT,
   status TEXT,
   created_at TIMESTAMP,
   updated_at TIMESTAMP,
@@ -50,3 +51,20 @@ CREATE TABLE IF NOT EXISTS video_by_third_party_id (
   video_id UUID,
   PRIMARY KEY (third_party_video_id)
 );
+
+
+-- =========================
+-- DEV (COMENTADO)
+-- =========================
+
+-- TRUNCATE TABLE video;
+-- TRUNCATE TABLE video_by_user;
+-- TRUNCATE TABLE video_parts;
+-- TRUNCATE TABLE video_by_third_party_id;
+
+-- DROP TABLE video;
+-- DROP TABLE video_by_user;
+-- DROP TABLE video_parts;
+-- DROP TABLE video_by_third_party_id;
+
+-- DROP KEYSPACE fiap_image;

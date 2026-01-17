@@ -6,8 +6,12 @@ export type IntegrationType = 's3'
 export class ThirdPartyIntegration extends DefaultEntity {
   readonly provider: IntegrationType
 
-  constructor() {
+  private constructor() {
     super(UniqueEntityID.create())
     this.provider = 's3'
+  }
+
+  static create(): ThirdPartyIntegration {
+    return new ThirdPartyIntegration()
   }
 }

@@ -1,9 +1,6 @@
-import {
-  CreateVideoURLS,
-  VideoMetadata,
-} from '@modules/video-processor/domain/entities/create-video-urls'
 import { Result } from '@core/domain/result'
 import { BaseS3Service } from '@modules/video-processor/infra/services/aws/s3/base-s3'
+import { VideoMetadata } from '@modules/video-processor/domain/value-objects/video-metadata.vo'
 
 export type UploadVideoPartsParams = {
   videoId: string
@@ -20,7 +17,7 @@ export class UploadVideoParts extends BaseS3Service {
 
   async createUploadId(
     videoId: string,
-  ): Promise<Result<{ uploadId: string }, Error>> {
+  ): Promise<Result<{ uploadId: string; key: string }, Error>> {
     return this.startMultipartUpload(videoId)
   }
 

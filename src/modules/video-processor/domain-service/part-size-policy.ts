@@ -11,6 +11,7 @@ export class PartSizePolicy {
   static readonly SAFE_PART_SIZE = MegabytesValueObject.create(32).value
   static readonly MIN_PART_SIZE = MegabytesValueObject.create(5).value
   static readonly MAX_PART_SIZE = GigabytesValueObject.create(5).value
+  static readonly MAX_NUMBER_OF_PARTS = 20
 
   static isSmallVideo(bytes: number): boolean {
     return bytes <= PartSizePolicy.MIN_PART_SIZE
@@ -46,5 +47,9 @@ export class PartSizePolicy {
     }
 
     return Result.ok({ partSize, numberOfParts })
+  }
+
+  static numberOfPartsIsLargeThanPageSize(numberOfParts: number): boolean {
+    return numberOfParts > PartSizePolicy.MAX_NUMBER_OF_PARTS
   }
 }
