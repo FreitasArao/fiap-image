@@ -3,11 +3,11 @@ services:
     image: localstack/localstack:3.8.1
     ports:
       - "4566:4566"
-      - "4510-4559:4510-4559"
     environment:
-      - SERVICES=sqs,s3,events,eventbridge
-      - EVENTBRIDGE_ENDPOINT_URL=http://localhost:4566
-      - PROVIDER_OVERRIDE_EVENTS=v2
+      - SERVICES=s3,events,sqs
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
       - DEBUG=0
       - LOCALSTACK_HOST=localhost.localstack.cloud
       - EXTRA_CORS_ALLOWED_ORIGINS=https://app.localstack.cloud
@@ -23,6 +23,9 @@ services:
   localstack-init:
     container_name: localstack-init
     image: amazon/aws-cli:latest
+    depends_on:
+      localstack:
+        condition: service_healthy
     environment:
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
@@ -31,13 +34,54 @@ services:
     command:
       - -c
       - |
-        echo "Aguardando LocalStack..."
-        sleep 5
-        echo "LocalStack ok"
-        echo "Criando bucket fiapx-video-parts"
-        aws --endpoint-url=http://localstack:4566 s3 mb s3://fiapx-video-parts
-        echo "Bucket fiapx-video-parts criado"
+        set -e
 
-    depends_on:
-      localstack:
-        condition: service_healthy
+        echo "=== Criando bucket ==="
+        aws --endpoint-url=http://localstack:4566 s3 mb s3://fiapx-video-parts || true
+
+        echo "=== Habilitando EventBridge no bucket ==="
+        aws --endpoint-url=http://localstack:4566 s3api put-bucket-notification-configuration \
+          --bucket fiapx-video-parts \
+          --notification-configuration '{ "EventBridgeConfiguration": {} }'
+
+        echo "=== Criando fila SQS ==="
+        aws --endpoint-url=http://localstack:4566 sqs create-queue \
+          --queue-name multipart-complete-queue
+
+        echo "=== Configurando permissao da fila para EventBridge ==="
+        aws --endpoint-url=http://localstack:4566 sqs set-queue-attributes \
+          --queue-url http://localstack:4566/000000000000/multipart-complete-queue \
+          --attributes '{
+            "Policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"events.amazonaws.com\"},\"Action\":\"sqs:SendMessage\",\"Resource\":\"arn:aws:sqs:us-east-1:000000000000:multipart-complete-queue\"}]}"
+          }'
+
+        echo "=== Criando rule EventBridge ==="
+        aws --endpoint-url=http://localstack:4566 events put-rule \
+          --name multipart-complete-rule \
+          --event-pattern '{
+            "source": ["aws.s3"],
+            "detail-type": ["Object Created"],
+            "detail": {
+              "bucket": { "name": ["fiapx-video-parts"] },
+              "reason": ["CompleteMultipartUpload"]
+            }
+          }'
+
+        echo "=== Ligando rule a fila SQS com InputTransformer ==="
+        aws --endpoint-url=http://localstack:4566 events put-targets \
+          --rule multipart-complete-rule \
+          --targets '[
+            {
+              "Id": "sqs-target",
+              "Arn": "arn:aws:sqs:us-east-1:000000000000:multipart-complete-queue",
+              "InputTransformer": {
+                "InputPathsMap": {
+                  "bucket": "$.detail.bucket.name",
+                  "key": "$.detail.object.key"
+                },
+                "InputTemplate": "{\"bucket\": <bucket>, \"key\": <key>}"
+              }
+            }
+          ]'
+
+        echo "=== Setup concluido ==="
