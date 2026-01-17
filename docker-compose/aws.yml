@@ -5,7 +5,9 @@ services:
       - "4566:4566"
       - "4510-4559:4510-4559"
     environment:
-      - SERVICES=sqs,s3
+      - SERVICES=sqs,s3,events,eventbridge
+      - EVENTBRIDGE_ENDPOINT_URL=http://localhost:4566
+      - PROVIDER_OVERRIDE_EVENTS=v2
       - DEBUG=0
       - LOCALSTACK_HOST=localhost.localstack.cloud
       - EXTRA_CORS_ALLOWED_ORIGINS=https://app.localstack.cloud
@@ -32,6 +34,10 @@ services:
         echo "Aguardando LocalStack..."
         sleep 5
         echo "LocalStack ok"
+        echo "Criando bucket fiapx-video-parts"
+        aws --endpoint-url=http://localstack:4566 s3 mb s3://fiapx-video-parts
+        echo "Bucket fiapx-video-parts criado"
+
     depends_on:
       localstack:
         condition: service_healthy

@@ -59,6 +59,77 @@ export class DataSource {
     }
   }
 
+  async startTransaction(): Promise<Result<void, DatabaseExecutionError>> {
+    try {
+      await this.client.execute('BEGIN')
+      return Result.ok(undefined)
+    } catch (error) {
+      return Result.fail(
+        DatabaseExecutionError.create(
+          error instanceof Error
+            ? error.message
+            : 'Unkown error trying to start transaction',
+        ),
+      )
+    }
+  }
+
+  async commitTransaction(): Promise<Result<void, DatabaseExecutionError>> {
+    try {
+      await this.client.execute('COMMIT')
+      return Result.ok(undefined)
+    } catch (error) {
+      return Result.fail(
+        DatabaseExecutionError.create(
+          error instanceof Error
+            ? error.message
+            : 'Unkown error trying to commit transaction',
+        ),
+      )
+    }
+  }
+
+  async rollbackTransaction(): Promise<Result<void, DatabaseExecutionError>> {
+    try {
+      await this.client.execute('ROLLBACK')
+      return Result.ok(undefined)
+    } catch (error) {
+      return Result.fail(
+        DatabaseExecutionError.create(
+          error instanceof Error
+            ? error.message
+            : 'Unkown error trying to rollback transaction',
+        ),
+      )
+    }
+  }
+
+  async executeTransaction(
+    queries: string[],
+    params: unknown[][],
+    consistency: cassandra.types.consistencies = cassandra.types.consistencies
+      .one,
+  ): Promise<Result<void, DatabaseExecutionError>> {
+    try {
+      await this.startTransaction()
+      await this.client.execute(queries.join(';'), params, {
+        consistency,
+        prepare: true,
+      })
+      await this.commitTransaction()
+    } catch (error) {
+      await this.rollbackTransaction()
+      return Result.fail(
+        DatabaseExecutionError.create(
+          error instanceof Error
+            ? error.message
+            : 'Unkown error trying to execute transaction',
+        ),
+      )
+    }
+    return Result.ok(undefined)
+  }
+
   async execute(
     query: string,
     params: unknown[],

@@ -9,6 +9,8 @@
     "lint:check": "biome check"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.971.0",
+    "@aws-sdk/s3-request-presigner": "^3.971.0",
     "@elysiajs/openapi": "^1.4.13",
     "@elysiajs/opentelemetry": "^1.4.10",
     "cassandra-driver": "^4.8.0",

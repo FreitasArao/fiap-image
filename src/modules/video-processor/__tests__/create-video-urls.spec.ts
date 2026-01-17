@@ -1,5 +1,6 @@
-import { CreateVideoURLS } from '@core/domain/create-video-urls'
-import { MegabytesValueObject } from '@core/domain/value-object/megabytes.vo'
+import { CreateVideoURLS } from '@modules/video-processor/domain/entities/create-video-urls'
+import { MegabytesValueObject } from '@modules/video-processor/domain/value-objects/megabytes.vo'
+import { VideoMetadataVO } from '@modules/video-processor/domain/value-objects/video-metadata.vo'
 import { beforeAll, describe, expect, it } from 'bun:test'
 
 describe('CreateVideoUrls', () => {
@@ -8,11 +9,10 @@ describe('CreateVideoUrls', () => {
     sut = new CreateVideoURLS()
   })
   it('When a video metadadta size is lower than 5mb should return 1 part', () => {
-    const videoMetadata = {
-      totalSize: 4 * 1024 * 1024,
+    const videoMetadata = VideoMetadataVO.create({
+      totalSize: MegabytesValueObject.create(4).value,
       duration: 100000000,
-    }
-
+    })
     const parts = sut.create(videoMetadata)
 
     expect(parts.isSuccess).toBe(true)
@@ -51,10 +51,10 @@ describe('CreateVideoUrls', () => {
     size,
     expected,
   }) => {
-    const videoMetadata = {
+    const videoMetadata = VideoMetadataVO.create({
       totalSize: size.value,
       duration: 100000000,
-    }
+    })
 
     const parts = sut.create(videoMetadata)
 

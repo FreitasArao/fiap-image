@@ -7,15 +7,19 @@ services:
     environment:
       - CASSANDRA_CONTACT_POINTS=${CASSANDRA_CONTACT_POINTS}
       - CASSANDRA_KEYSPACE=${CASSANDRA_KEYSPACE}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_ENDPOINT=${AWS_ENDPOINT}
     ports:
       - "3002:3010"
     volumes:
       - ../:/usr/src/app
-      - /usr/src/app/node_modules
+
     depends_on:
       database:
         condition: service_healthy
-      scylla-init:
+      db-init:
         condition: service_completed_successfully
       localstack:
         condition: service_healthy

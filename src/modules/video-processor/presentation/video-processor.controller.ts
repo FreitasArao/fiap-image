@@ -1,23 +1,37 @@
-import { DefaultDatabase } from '@core/libs/database/default-scylla.database'
+import { Result } from '@core/domain/result'
 import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
-import { VideoRepositoryImpl } from '@modules/video-processor/infra/repositories/video-repository-impl'
+import { CreateUrlsUseCase } from '@modules/video-processor/application/create-urls.use-case'
+import { CreateVideoUseCase } from '@modules/video-processor/application/create-video.use-case'
 
 export class VideoProcessorController {
   constructor(
     private readonly logger: AbstractLoggerService,
-    private readonly videoRepository: VideoRepositoryImpl = new VideoRepositoryImpl(
-      logger,
-    ),
+    private readonly createVideoUseCase: CreateVideoUseCase,
+    private readonly createUrlsUseCase: CreateUrlsUseCase,
   ) {}
-  async create() {
+  async create(): Promise<Result<string[], Error>> {
     this.logger.log('Creating video processor')
 
-    return this.videoRepository.create({
-      created_at: new Date(),
-      updated_at: new Date(),
-      status: 'pending',
-      upload_urls: [],
-      video_id: '123',
+    const video = await this.createVideoUseCase.execute({
+      totalSize: 40_000_000, // 40MB
+      duration: 1000, // 1s
     })
+
+    if (video.isFailure) return Result.fail(video.error)
+
+    const videoResult = video.value
+
+    if (!videoResult) return Result.fail(new Error('Video not found'))
+
+    const urls = await this.createUrlsUseCase.execute({
+      videoId: videoResult.video.id,
+      totalSize: videoResult.video.totalSize,
+      duration: videoResult.video.duration,
+      uploadId: videoResult.uploadId,
+    })
+
+    if (urls.isFailure) return Result.fail(urls.error)
+
+    return Result.ok(urls.value)
   }
 }

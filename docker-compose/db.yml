@@ -1,45 +1,41 @@
 services:
   database:
-    image: scylladb/scylla:latest
-    container_name: scylladb
-    command: --smp 1 --memory 750M --overprovisioned 1 --developer-mode 1
+    image: cassandra:4.1
+    container_name: cassandra
     ports:
       - "9042:9042"
     environment:
-      - CASSANDRA_CONTACT_POINTS=database
-      - CASSANDRA_KEYSPACE=fiap_image
+      - CASSANDRA_CLUSTER_NAME=fiap-image
+      - CASSANDRA_DC=datacenter1
+      - CASSANDRA_RACK=rack1
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
     volumes:
-      - scylladb-data:/var/lib/scylla
+      - cassandra-data:/var/lib/cassandra
     healthcheck:
       test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 30s
+      start_period: 40s
 
-  scylla-init:
-    image: scylladb/scylla:latest
-    container_name: scylla-init
-    user: root
+  db-init:
+    image: cassandra:4.1
+    container_name: cassandra-init
     depends_on:
       database:
         condition: service_healthy
     volumes:
-      - scylla-init-state:/state
+      - ./init-schema.cql:/init-schema.cql:ro
     entrypoint:
       - bash
       - -c
       - |
-        mkdir -p /state && chmod 777 /state
-        if [ ! -f /state/initialized ]; then
-          cqlsh database -e "CREATE KEYSPACE IF NOT EXISTS fiap_image WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}"
-          touch /state/initialized
-        fi
+        cqlsh database -f /init-schema.cql
     restart: "no"
 
   database-admin:
     image: ipushc/cassandra-web:latest
-    container_name: scylladb-admin
+    container_name: cassandra-admin
     ports:
       - "8083:8083"
     environment:
@@ -48,9 +44,8 @@ services:
     depends_on:
       database:
         condition: service_healthy
-      scylla-init:
+      db-init:
         condition: service_completed_successfully
 
 volumes:
-  scylladb-data:
-  scylla-init-state:
+  cassandra-data:

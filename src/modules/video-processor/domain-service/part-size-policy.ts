@@ -1,6 +1,6 @@
 import { Result } from '@core/domain/result'
-import { GigabytesValueObject } from '@core/domain/value-object/gigabytes.vo'
-import { MegabytesValueObject } from '@core/domain/value-object/megabytes.vo'
+import { GigabytesValueObject } from '@modules/video-processor/domain/value-objects/gigabytes.vo'
+import { MegabytesValueObject } from '@modules/video-processor/domain/value-objects/megabytes.vo'
 import {
   PartSizePolicyError,
   PartSizePolicyResult,

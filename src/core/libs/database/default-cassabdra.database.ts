@@ -17,7 +17,7 @@ export type UpdateEntity<T> = {
 export abstract class DefaultDatabase {
   constructor(
     protected readonly datasource: DataSource,
-    private readonly logger: AbstractLoggerService,
+    protected readonly logger: AbstractLoggerService,
   ) {}
 
   protected prepareInsert<T>(entity: InsertEntity<T>) {
