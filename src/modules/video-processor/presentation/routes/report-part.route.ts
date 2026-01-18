@@ -3,11 +3,6 @@ import { ReportPartUploadUseCase } from '@modules/video-processor/application/re
 import { VideoRepositoryImpl } from '@modules/video-processor/infra/repositories/video-repository-impl'
 import { StatusMap, t } from 'elysia'
 
-/**
- * Route: POST /videos/:id/parts/:partNumber
- * Reports that a part has been successfully uploaded to S3.
- * Client must call this after each successful part upload with the ETag.
- */
 export const reportPartRoute = BaseElysia.create({ prefix: '' }).post(
   '/:id/parts/:partNumber',
   async ({ params, body, logger, set }) => {

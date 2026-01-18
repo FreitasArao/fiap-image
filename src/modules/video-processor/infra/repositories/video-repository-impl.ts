@@ -13,7 +13,7 @@ import type {
 import { Video } from '@modules/video-processor/domain/entities/video'
 import { VideoPart } from '@modules/video-processor/domain/entities/video-part'
 import { VideoRepository } from '@modules/video-processor/domain/repositories/video.repository'
-import { UniqueEntityID } from '@modules/video-processor/domain/value-objects/unique-entity-id.vo'
+import { UniqueEntityID } from '@core/domain/value-objects/unique-entity-id.vo'
 import { VideoMetadataVO } from '@modules/video-processor/domain/value-objects/video-metadata.vo'
 import {
   VideoStatusVO,
@@ -54,57 +54,87 @@ export class VideoRepositoryImpl
       }
 
       const videoRow = videoRows[0]
-
-      // Fetch parts
-      const partsResult = await this.select<VideoPartsTable>({
-        table: 'video_parts',
-        where: { video_id: videoId },
-      })
-
-      const partsRows = partsResult.isSuccess ? partsResult.value : []
-
-      // Reconstruct Video entity
-      const parts = (partsRows || []).map((partRow) =>
-        VideoPart.createFromDatabase({
-          videoId: UniqueEntityID.create(videoId),
-          partNumber: partRow.part_number,
-          size: partRow.size,
-          thirdPartyVideoPartId: partRow.third_party_video_part_id,
-          integration: ThirdPartyIntegration.create(),
-          url: partRow.url,
-          etag: partRow.etag,
-          uploadedAt: partRow.uploaded_at,
-          status: PartStatusVO.create(partRow.status as PartStatusType),
-        }),
-      )
-
-      const video = Video.createFromDatabase({
-        id: UniqueEntityID.create(videoId),
-        userId: UniqueEntityID.create(videoRow.user_id),
-        metadata: VideoMetadataVO.create({
-          totalSize: videoRow.total_size,
-          duration: videoRow.duration,
-        }),
-        status: VideoStatusVO.create(videoRow.status as VideoStatus),
-        parts,
-        integration: ThirdPartyIntegration.create(),
-        thirdPartyVideoIntegration:
-          VideoThirdPartyIntegrationsMetadataVO.create({
-            id: videoRow.third_party_video_id,
-            bucket: videoRow.bucket_name,
-            path: videoRow.object_key,
-          }),
-        failureReason: videoRow.failure_reason,
-      })
-
-      this.logger.log('Video found', { videoId, status: video.status.value })
-      return Result.ok(video)
+      return this.mapVideoRowToEntity(videoRow)
     } catch (error) {
       this.logger.error('Failed to find video', { videoId, error })
       return Result.fail(
         error instanceof Error ? error : new Error(String(error)),
       )
     }
+  }
+
+  async findByIntegrationId(
+    integrationId: string,
+  ): Promise<Result<Video | null, Error>> {
+    this.logger.log('Finding video by Integration ID', { integrationId })
+    try {
+      const lookupResult = await this.select<VideoByThirdPartyIdTable>({
+        table: 'video_by_third_party_id',
+        where: { third_party_video_id: integrationId },
+      })
+
+      if (lookupResult.isFailure) return Result.fail(lookupResult.error)
+
+      const rows = lookupResult.value
+      if (!rows || rows.length === 0) return Result.ok(null)
+
+      // Found videoId, delegate to findById
+      return this.findById(rows[0].video_id)
+    } catch (error) {
+      this.logger.error('Failed to find video by integration id', {
+        integrationId,
+        error,
+      })
+      return Result.fail(error as Error)
+    }
+  }
+
+  private async mapVideoRowToEntity(
+    videoRow: VideoTable,
+  ): Promise<Result<Video | null, Error>> {
+    // Fetch parts
+    const partsResult = await this.select<VideoPartsTable>({
+      table: 'video_parts',
+      where: { video_id: videoRow.video_id },
+    })
+
+    const partsRows = partsResult.isSuccess ? partsResult.value : []
+
+    // Reconstruct Video entity
+    // third_party_video_part_id armazena o etag (identificador do provedor)
+    const parts = (partsRows || []).map((partRow) =>
+      VideoPart.createFromDatabase({
+        videoId: UniqueEntityID.create(videoRow.video_id),
+        partNumber: partRow.part_number,
+        size: partRow.size,
+        thirdPartyVideoPartId: partRow.third_party_video_part_id,
+        integration: ThirdPartyIntegration.create(),
+        url: partRow.url,
+        etag: partRow.third_party_video_part_id, // etag armazenado em third_party_video_part_id
+        uploadedAt: partRow.uploaded_at,
+        status: PartStatusVO.create(partRow.status as PartStatusType),
+      }),
+    )
+
+    const video = Video.createFromDatabase({
+      id: UniqueEntityID.create(videoRow.video_id),
+      userId: UniqueEntityID.create(videoRow.user_id),
+      metadata: VideoMetadataVO.create({
+        totalSize: videoRow.total_size,
+        duration: videoRow.duration,
+      }),
+      status: VideoStatusVO.create(videoRow.status as VideoStatus),
+      parts,
+      integration: ThirdPartyIntegration.create(),
+      thirdPartyVideoIntegration: VideoThirdPartyIntegrationsMetadataVO.create({
+        id: videoRow.third_party_video_id,
+        bucket: videoRow.bucket_name,
+        path: videoRow.object_key,
+      }),
+      failureReason: videoRow.failure_reason,
+    })
+
+    return Result.ok(video)
   }
 
   async createVideo(
@@ -183,16 +213,16 @@ export class VideoRepositoryImpl
     video: Video,
   ): Promise<Result<void, DatabaseExecutionError>> {
     this.logger.log('Creating video part', { video: video.id.value })
+    // etag é armazenado em third_party_video_part_id (identificador genérico do provedor)
     const parts: VideoPartsTable[] = video.parts.map((part) => ({
       video_id: video.id.value,
       part_number: part.partNumber,
       size: part.size,
-      third_party_video_part_id: part.thirdPartyVideoPartId,
+      third_party_video_part_id: part.etag || part.thirdPartyVideoPartId, // etag → third_party_video_part_id
       status: part.status.value,
       created_at: part.createdAt,
       updated_at: part.updatedAt,
       url: part.url,
-      etag: part.etag,
       uploaded_at: part.uploadedAt,
     }))
     await Promise.all(
@@ -230,14 +260,14 @@ export class VideoRepositoryImpl
       })
       return Result.fail(new Error('Video part not found'))
     }
+    // etag é armazenado em third_party_video_part_id (identificador genérico do provedor)
     const result = await this.update<VideoPartsTable>({
       table: 'video_parts',
       data: {
         updated_at: new Date(),
         size: part.size,
-        third_party_video_part_id: part.thirdPartyVideoPartId,
+        third_party_video_part_id: part.etag || part.thirdPartyVideoPartId, // etag → third_party_video_part_id
         status: part.status.value,
-        etag: part.etag,
         uploaded_at: part.uploadedAt,
       },
       where: {

@@ -3,6 +3,8 @@ import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 import {
   CompleteMultipartUploadCommand,
   CreateMultipartUploadCommand,
+  AbortMultipartUploadCommand,
+  type CompleteMultipartUploadCommandOutput,
   S3Client,
   UploadPartCommand,
 } from '@aws-sdk/client-s3'
@@ -23,7 +25,7 @@ export type CompleteMultipartUploadParams = {
 
 export abstract class BaseS3Service {
   protected readonly s3: S3Client
-  constructor(private readonly logger: AbstractLoggerService) {
+  constructor(protected readonly logger: AbstractLoggerService) {
     if (!Bun.env.AWS_ACCESS_KEY_ID || !Bun.env.AWS_SECRET_ACCESS_KEY) {
       throw new Error(
         'AWS_ENDPOINT, AWS_REGION, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set',
@@ -107,12 +109,14 @@ export abstract class BaseS3Service {
         ChecksumAlgorithm: undefined,
       })
 
+      const expiresIn = params.expiresIn ?? this.oneHourToExpiresIn()
       const url = await getSignedUrl(this.s3, command, {
-        expiresIn: params.expiresIn ?? this.oneHourToExpiresIn(),
+        expiresIn,
       })
 
       return Result.ok({
         url: url,
+        expiresAt: new Date(Date.now() + expiresIn * 1000),
       })
     } catch (error) {
       if (error instanceof Error) {
@@ -177,6 +181,36 @@ export abstract class BaseS3Service {
         return Result.fail(new Error(error.message))
       }
       return Result.fail(new Error('Failed to complete multipart upload'))
+    }
+  }
+
+  async abortMultipartUpload(
+    bucket: string,
+    key: string,
+    uploadId: string,
+  ): Promise<Result<void, Error>> {
+    this.logger.log('Aborting multipart upload', { bucket, key, uploadId })
+
+    try {
+      const command = new AbortMultipartUploadCommand({
+        Bucket: bucket,
+        Key: key,
+        UploadId: uploadId,
+      })
+
+      await this.s3.send(command)
+      return Result.ok(undefined)
+    } catch (error) {
+      if (error instanceof Error) {
+        this.logger.error('Failed to abort multipart upload', {
+          bucket: bucket,
+          key: key,
+          uploadId: uploadId,
+          error: error.message,
+        })
+        return Result.fail(new Error(error.message))
+      }
+      return Result.fail(new Error('Failed to abort multipart upload'))
     }
   }
 }

@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS video (
   object_key TEXT,
   bucket_name TEXT,
   created_at TIMESTAMP,
+  failure_reason TEXT,
   updated_at TIMESTAMP,
   PRIMARY KEY (video_id)
 );
@@ -32,6 +33,7 @@ CREATE TABLE IF NOT EXISTS video_by_user (
 ) WITH CLUSTERING ORDER BY (created_at DESC, video_id ASC);
 
 -- Partes do vídeo
+-- third_party_video_part_id armazena o identificador do provedor (ex: ETag do S3)
 CREATE TABLE IF NOT EXISTS video_parts (
   video_id UUID,
   part_number INT,
@@ -39,6 +41,7 @@ CREATE TABLE IF NOT EXISTS video_parts (
   third_party_video_part_id TEXT,
   url TEXT,
   status TEXT,
+  uploaded_at TIMESTAMP,
   created_at TIMESTAMP,
   updated_at TIMESTAMP,
   PRIMARY KEY (video_id, part_number)
@@ -68,3 +71,6 @@ CREATE TABLE IF NOT EXISTS video_by_third_party_id (
 -- DROP TABLE video_by_third_party_id;
 
 -- DROP KEYSPACE fiap_image;
+
+
+curl -X PUT -T ./Screen\ Recording\ 2025-06-03\ at\ 20.23.50.mov -i "http://localhost:4566/fiapx-video-parts/019bd2ab-7ca4-7000-806b-f946bb28e6b5?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=ASIA47CRVPMBWXN5D6FL%2F20260118%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260118T195341Z&X-Amz-Expires=3600&X-Amz-Signature=1dcbda149dfc492f8205ad1d78cfafba501f0e55552c414ece6a2e10b20200be&X-Amz-SignedHeaders=host&partNumber=1&uploadId=XTnl2pXhtO7KTl9vPTy7H-TBr81Yon3e9SBttIAmo77pYmJwrrqK-X4GKjX2WPQsYioFlM9r8-bmJEOqURpquDkThBHy0lMOseurDB-6u8j5sXwQjYOPOOY9OaRd5ZjT&x-id=UploadPart"

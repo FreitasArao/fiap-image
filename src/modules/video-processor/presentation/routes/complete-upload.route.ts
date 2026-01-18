@@ -4,11 +4,6 @@ import { VideoRepositoryImpl } from '@modules/video-processor/infra/repositories
 import { UploadVideoParts } from '@modules/video-processor/infra/services/aws/s3/upload-video-parts'
 import { StatusMap, t } from 'elysia'
 
-/**
- * Route: POST /videos/:id/complete
- * Completes the multipart upload after all parts are uploaded.
- * Calls S3 CompleteMultipartUpload and transitions status to UPLOADED.
- */
 export const completeUploadRoute = BaseElysia.create({ prefix: '' }).post(
   '/:id/complete',
   async ({ params, logger, set }) => {

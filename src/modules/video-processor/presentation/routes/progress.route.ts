@@ -3,10 +3,6 @@ import { GetUploadProgressUseCase } from '@modules/video-processor/application/g
 import { VideoRepositoryImpl } from '@modules/video-processor/infra/repositories/video-repository-impl'
 import { StatusMap, t } from 'elysia'
 
-/**
- * Route: GET /videos/:id/progress
- * Returns the current upload progress for a video.
- */
 export const progressRoute = BaseElysia.create({ prefix: '' }).get(
   '/:id/progress',
   async ({ params, logger, set }) => {

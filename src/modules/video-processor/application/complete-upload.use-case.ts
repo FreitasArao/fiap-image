@@ -1,6 +1,5 @@
 import { Result } from '@core/domain/result'
 import type { VideoRepository } from '@modules/video-processor/domain/repositories/video.repository'
-import type { UploadVideoParts } from '@modules/video-processor/infra/services/aws/s3/upload-video-parts'
 
 export type CompleteUploadParams = {
   videoId: string
@@ -12,21 +11,12 @@ export type CompleteUploadResult = {
   etag: string
 }
 
-/**
- * Use case for completing a multipart upload.
- * Validates all parts are uploaded, calls S3 CompleteMultipartUpload,
- * and transitions status to UPLOADED.
- */
+import type { UploadVideoPartsService } from '@modules/video-processor/domain/services/upload-video-parts.service.interface'
+
 export class CompleteUploadUseCase {
   constructor(
-    private readonly videoRepository: Pick<
-      VideoRepository,
-      'findById' | 'updateVideo'
-    >,
-    private readonly uploadService: Pick<
-      UploadVideoParts,
-      'completeMultipartUpload'
-    >,
+    private readonly videoRepository: VideoRepository,
+    private readonly uploadService: UploadVideoPartsService,
   ) {}
 
   async execute(

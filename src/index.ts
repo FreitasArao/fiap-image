@@ -3,8 +3,8 @@ import { BaseElysia } from '@core/libs/elysia'
 import { docs } from '@modules/docs'
 import { logger } from '@modules/logging'
 import { telemetry } from '@modules/telemetry'
-import { videoProcessorRoute } from '@modules/video-processor/index.route'
-// import { connectCassandra } from '@core/libs/database/cassandra'
+import { videoProcessorRoutes } from '@modules/video-processor/presentation/routes'
+import { StatusMap } from 'elysia'
 
 const datasource = DataSource.getInstance(logger)
 
@@ -19,10 +19,14 @@ const app = BaseElysia.create()
   .onStop(shutdown)
   .use(telemetry)
   .use(docs)
-  .use(videoProcessorRoute)
-  .get('/health', async () => {
-    // Simple health check
-    return { status: 'ok', timestamp: new Date() }
+  .use(videoProcessorRoutes)
+  .get('/health', async ({ set }) => {
+    const database = await datasource.isConnected()
+    if (database.isFailure) {
+      set.status = StatusMap['Service Unavailable']
+      return { status: 'error', timestamp: new Date() }
+    }
+    return { status: 'ok', timestamp: new Date(), database: database.value }
   })
 
 app.listen(3010, () => {

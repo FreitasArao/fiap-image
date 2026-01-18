@@ -4,19 +4,16 @@ import { VideoRepositoryImpl } from '@modules/video-processor/infra/repositories
 import { UploadVideoParts } from '@modules/video-processor/infra/services/aws/s3/upload-video-parts'
 import { StatusMap, t } from 'elysia'
 
-/**
- * Route: GET /videos/:id/upload-urls
- * Generates and returns a batch of upload URLs for the video.
- * Uses pagination (next batch of pending parts).
- */
 export const uploadUrlsRoute = BaseElysia.create({ prefix: '' }).get(
   '/:id/upload-urls',
   async ({ params, logger, set }) => {
+    logger.log('Starting upload URLs video', { videoId: params.id })
     const { id: videoId } = params
 
     const useCase = new GenerateUploadUrlsUseCase(
       new VideoRepositoryImpl(logger),
       new UploadVideoParts(logger),
+      logger,
     )
 
     const result = await useCase.execute({ videoId })

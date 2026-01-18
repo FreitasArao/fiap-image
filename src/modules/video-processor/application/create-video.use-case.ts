@@ -1,17 +1,19 @@
 import { PartSizePolicy } from '@modules/video-processor/domain-service/part-size-policy'
 import { Result } from '@core/domain/result'
-import { UploadVideoParts } from '@modules/video-processor/infra/services/aws/s3/upload-video-parts'
+
 import { Video } from '@modules/video-processor/domain/entities/video'
 import { VideoMetadataVO } from '@modules/video-processor/domain/value-objects/video-metadata.vo'
 import { VideoThirdPartyIntegrationsMetadataVO } from '@modules/video-processor/domain/value-objects/video-third-party-integrations-metadata.vo'
 import { ThirdPartyIntegration } from '@modules/video-processor/domain/entities/third-party-integration.vo'
 import { VideoPart } from '@modules/video-processor/domain/entities/video-part'
-import { VideoRepositoryImpl } from '@modules/video-processor/infra/repositories/video-repository-impl'
-import { UniqueEntityID } from '@modules/video-processor/domain/value-objects/unique-entity-id.vo'
+import { VideoRepository } from '@modules/video-processor/domain/repositories/video.repository'
+import { UploadVideoPartsService } from '@modules/video-processor/domain/services/upload-video-parts.service.interface'
+import { UniqueEntityID } from '@core/domain/value-objects/unique-entity-id.vo'
 import {
   PartSizePolicyResult,
   PartSizePolicyError,
 } from '@core/errors/part-size-policy.error'
+import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 
 export type CreateVideoUseCaseParams = {
   totalSize: number
@@ -21,27 +23,47 @@ export type CreateVideoUseCaseParams = {
 export type CreateVideoUseCaseResult = {
   video: Video
   uploadId: string
-  urls: string[] // Will be empty initially
+  urls: string[]
 }
 
 export class CreateVideoUseCase {
   constructor(
-    private readonly videoRepository: Pick<VideoRepositoryImpl, 'createVideo'>,
-    private readonly uploadVideoParts: UploadVideoParts,
+    private readonly videoRepository: VideoRepository,
+    private readonly uploadVideoParts: UploadVideoPartsService,
+    private readonly logger: AbstractLoggerService,
   ) {}
 
   async execute(
     params: CreateVideoUseCaseParams,
   ): Promise<Result<CreateVideoUseCaseResult, Error>> {
+    this.logger.log('Creating video', {
+      totalSize: params.totalSize,
+      duration: params.duration,
+    })
     const videoId = UniqueEntityID.create().value
 
+    this.logger.log('Video ID created', { videoId })
+
     const policy = PartSizePolicy.calculate(params.totalSize)
-    if (policy.isFailure) return Result.fail(policy.error)
+    if (policy.isFailure) {
+      this.logger.error('Failed to calculate part size policy', {
+        error: policy.error,
+      })
+      return Result.fail(policy.error)
+    }
 
     const thirdPartyVideoResult =
       await this.uploadVideoParts.createUploadId(videoId)
-    if (thirdPartyVideoResult.isFailure)
+    if (thirdPartyVideoResult.isFailure) {
+      this.logger.error('Failed to create upload ID', {
+        error: thirdPartyVideoResult.error,
+      })
       return Result.fail(thirdPartyVideoResult.error)
+    }
+
+    this.logger.log('Upload ID created', {
+      uploadId: thirdPartyVideoResult.value.uploadId,
+    })
 
     const uploadId = thirdPartyVideoResult.value.uploadId
 
@@ -59,16 +81,21 @@ export class CreateVideoUseCase {
         path: thirdPartyVideoResult.value.key,
       })
 
-    // Create parts entities but DO NOT generate URLs yet
+    this.logger.log('Video created', { video })
+
     this.createParts(policy, video)
 
     const result = await this.videoRepository.createVideo(video)
-    if (result.isFailure) return Result.fail(result.error)
+    if (result.isFailure) {
+      this.logger.error('Failed to create video', { error: result.error })
+      return Result.fail(result.error)
+    }
 
+    this.logger.log('Video created', { video: video.id.value })
     return Result.ok({
       video,
       uploadId,
-      urls: [], // No URLs generated at creation time
+      urls: [],
     })
   }
 
@@ -80,9 +107,6 @@ export class CreateVideoUseCase {
   ) {
     let numberOfPartsToCreate = policy.value.numberOfParts
 
-    // Removed the MAX_PARTS limitation here for now, or keep it consistent?
-    // If we have very large videos, we might want to cap it.
-    // Preserving existing logic:
     if (
       PartSizePolicy.numberOfPartsIsLargeThanPageSize(
         policy.value.numberOfParts,
@@ -98,7 +122,7 @@ export class CreateVideoUseCase {
           partNumber: i + 1,
           size: policy.value.partSize,
           integration: video.integration,
-          url: '', // Initialize with empty URL
+          url: '',
         }),
       )
     }

@@ -27,13 +27,22 @@ export class InMemoryVideoRepository implements VideoRepository {
 
   async updateVideoPart(
     video: Video,
-    partNumber: number,
+    _partNumber: number,
   ): Promise<Result<void, Error>> {
     const index = this.items.findIndex((v) => v.id.value === video.id.value)
     if (index !== -1) {
       this.items[index] = video
     }
     return Result.ok(undefined)
+  }
+
+  async findByIntegrationId(
+    integrationId: string,
+  ): Promise<Result<Video | null, Error>> {
+    const video = this.items.find(
+      (v) => v.thirdPartyVideoIntegration?.value.id === integrationId,
+    )
+    return Result.ok(video || null)
   }
 
   async updateVideo(video: Video): Promise<Result<void, Error>> {

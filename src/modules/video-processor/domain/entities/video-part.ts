@@ -1,7 +1,7 @@
 import { DefaultEntity } from '@core/domain/entity/default-entity'
 import { ThirdPartyIntegration } from '@modules/video-processor/domain/entities/third-party-integration.vo'
 import { PartStatusVO } from '@modules/video-processor/domain/value-objects/part-status.vo'
-import { UniqueEntityID } from '@modules/video-processor/domain/value-objects/unique-entity-id.vo'
+import { UniqueEntityID } from '@core/domain/value-objects/unique-entity-id.vo'
 
 export type CreateVideoPartParams = {
   videoId: UniqueEntityID
@@ -15,10 +15,6 @@ export type CreateVideoPartParams = {
   status?: PartStatusVO
 }
 
-/**
- * Represents a single part of a multipart video upload.
- * Tracks upload status, ETag (returned after S3 upload), and upload timestamp.
- */
 export class VideoPart extends DefaultEntity {
   readonly videoId: UniqueEntityID
   readonly partNumber: number
@@ -55,24 +51,14 @@ export class VideoPart extends DefaultEntity {
     return this._uploadedAt
   }
 
-  /**
-   * Checks if this part has been uploaded successfully.
-   */
   isUploaded(): boolean {
     return this._status.value === 'uploaded' && this._etag !== undefined
   }
 
-  /**
-   * Checks if this part is pending upload.
-   */
   isPending(): boolean {
     return this._status.value === 'pending'
   }
 
-  /**
-   * Marks this part as uploaded with the ETag from S3.
-   * @param etag - The ETag returned by S3 after successful upload
-   */
   markAsUploaded(etag: string): this {
     this._etag = etag
     this._uploadedAt = new Date()
@@ -80,9 +66,6 @@ export class VideoPart extends DefaultEntity {
     return this
   }
 
-  /**
-   * Marks this part as failed.
-   */
   markAsFailed(): this {
     this._status = PartStatusVO.create('failed')
     return this

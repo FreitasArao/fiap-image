@@ -1,8 +1,7 @@
 import { Result } from '@core/domain/result'
-import { VideoRepositoryImpl } from '@modules/video-processor/infra/repositories/video-repository-impl'
-import { UploadVideoParts } from '@modules/video-processor/infra/services/aws/s3/upload-video-parts'
+import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+
 import { VideoPart } from '@modules/video-processor/domain/entities/video-part'
-import { ThirdPartyIntegration } from '@modules/video-processor/domain/entities/third-party-integration.vo'
 
 export type GenerateUploadUrlsUseCaseParams = {
   videoId: string
@@ -15,35 +14,42 @@ export type GenerateUploadUrlsUseCaseResult = {
   nextPartNumber: number | null
 }
 
+import { VideoRepository } from '@modules/video-processor/domain/repositories/video.repository'
+import { UploadVideoPartsService } from '@modules/video-processor/domain/services/upload-video-parts.service.interface'
+
 export class GenerateUploadUrlsUseCase {
   private static readonly BATCH_SIZE = 20
 
   constructor(
-    private readonly videoRepository: Pick<
-      VideoRepositoryImpl,
-      'findById' | 'updateVideoPart' | 'updateVideo'
-    >,
-    private readonly uploadVideoParts: UploadVideoParts,
+    private readonly videoRepository: VideoRepository,
+    private readonly uploadVideoParts: UploadVideoPartsService,
+    private readonly logger: AbstractLoggerService,
   ) {}
 
   async execute(
     params: GenerateUploadUrlsUseCaseParams,
   ): Promise<Result<GenerateUploadUrlsUseCaseResult, Error>> {
+    this.logger.log('Generating upload URLs for video', {
+      video: params.videoId,
+    })
     const { videoId } = params
 
-    // 1. Find Video
     const videoResult = await this.videoRepository.findById(videoId)
     if (videoResult.isFailure) {
+      this.logger.error('Failed to find video', { error: videoResult.error })
       return Result.fail(videoResult.error)
     }
 
     const video = videoResult.value
     if (!video) {
+      this.logger.error('Video not found', { videoId })
       return Result.fail(new Error(`Video not found: ${videoId}`))
     }
 
-    // 2. Check status - allows CREATED or UPLOADING
     if (!video.canGenerateMoreUrls()) {
+      this.logger.log('Cannot generate URLs for video in status', {
+        status: video.status.value,
+      })
       return Result.fail(
         new Error(
           `Cannot generate URLs for video in status: ${video.status.value}`,
@@ -51,8 +57,10 @@ export class GenerateUploadUrlsUseCase {
       )
     }
 
-    // Check integration metadata existence
     if (!video.thirdPartyVideoIntegration) {
+      this.logger.error('Video missing third party integration metadata', {
+        videoId,
+      })
       return Result.fail(
         new Error(
           'Video missing third party integration metadata (uploadId/path)',
@@ -60,15 +68,12 @@ export class GenerateUploadUrlsUseCase {
       )
     }
 
-    // 3. Find parts with no URL
-    // We assume parts are ordered by partNumber.
-    // We want the first batch of parts that have empty URLs or need regeneration (but simpler: just empty).
-    // Actually, checking for empty string is simplest.
     const pendingParts = video.parts
       .filter((part) => !part.url || part.url === '')
       .sort((a, b) => a.partNumber - b.partNumber)
 
     if (pendingParts.length === 0) {
+      this.logger.log('No pending parts to generate URLs for', { videoId })
       return Result.ok({
         videoId,
         uploadId: video.thirdPartyVideoIntegration.value.id,
@@ -77,15 +82,20 @@ export class GenerateUploadUrlsUseCase {
       })
     }
 
-    // 4. Take batch
     const batch = pendingParts.slice(0, GenerateUploadUrlsUseCase.BATCH_SIZE)
 
-    // 5. Generate URLs
     const uploadId = video.thirdPartyVideoIntegration.value.id
     const bucketKey = video.thirdPartyVideoIntegration.value.path
     const generatedUrls: string[] = []
 
+    this.logger.log('Generating URLs for parts', {
+      batch: batch.map((part) => part.partNumber),
+    })
+
     const urlPromises = batch.map(async (part) => {
+      this.logger.log('Generating URL for part', {
+        partNumber: part.partNumber,
+      })
       const urlResult = await this.uploadVideoParts.createPartUploadURL({
         key: bucketKey,
         partNumber: part.partNumber,
@@ -93,34 +103,52 @@ export class GenerateUploadUrlsUseCase {
       })
 
       if (urlResult.isSuccess) {
+        this.logger.log('URL generated successfully', {
+          partNumber: part.partNumber,
+        })
         return { part, url: urlResult.value.url }
       }
+      this.logger.error('Failed to generate URL for part', {
+        partNumber: part.partNumber,
+      })
       return { part, url: null }
     })
 
     const results = await Promise.all(urlPromises)
 
-    // Check for failures
+    this.logger.log('URLs generated', {
+      results: results.map((r) => r.part.partNumber),
+    })
+
     if (results.some((r) => r.url === null)) {
+      this.logger.error('Failed to generate presigned URLs for some parts', {
+        parts: results.map((r) => r.part.partNumber),
+      })
       return Result.fail(
         new Error('Failed to generate presigned URLs for some parts'),
       )
     }
 
-    // 6. Update parts in DB
+    this.logger.log('Updating parts in DB', {
+      parts: results.map((r) => r.part.partNumber),
+    })
     for (const res of results) {
       if (res.url) {
         const updatedPart = VideoPart.assignUrl(res.part, res.url)
 
-        // We need to update the part in the video entity and in the DB.
+        this.logger.log('Part updated', { partNumber: res.part.partNumber })
         const index = video.parts.findIndex(
           (p) => p.partNumber === res.part.partNumber,
         )
         if (index !== -1) {
-          // Mutate the array to make sure consistent state in memory
+          this.logger.log('Part updated in memory', {
+            partNumber: res.part.partNumber,
+          })
           video.parts[index] = updatedPart
 
-          // Update in DB
+          this.logger.log('Updating part in DB', {
+            partNumber: res.part.partNumber,
+          })
           await this.videoRepository.updateVideoPart(
             video,
             updatedPart.partNumber,
@@ -130,18 +158,24 @@ export class GenerateUploadUrlsUseCase {
       }
     }
 
-    // 7. Transition status if first time (CREATED -> UPLOADING)
+    this.logger.log('Transitioning status if first time', {
+      status: video.status.value,
+    })
     if (video.status.value === 'CREATED') {
       const transitionResult = video.startUploading()
       if (transitionResult.isSuccess) {
+        this.logger.log('Status transitioned successfully', {
+          status: video.status.value,
+        })
         await this.videoRepository.updateVideo(video)
       }
     }
 
     const nextPartNumber =
       batch.length < pendingParts.length
-        ? pendingParts[batch.length].partNumber // The next one after this batch
+        ? pendingParts[batch.length].partNumber
         : null
+    this.logger.log('Next part number', { nextPartNumber })
 
     return Result.ok({
       videoId,

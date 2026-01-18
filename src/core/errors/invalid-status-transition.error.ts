@@ -1,6 +1,3 @@
-/**
- * Error thrown when attempting an invalid status transition.
- */
 export class InvalidStatusTransitionError extends Error {
   constructor(
     public readonly fromStatus: string,

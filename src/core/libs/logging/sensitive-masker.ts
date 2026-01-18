@@ -1,7 +1,3 @@
-/**
- * Utility for masking sensitive data in log output.
- * Prevents accidental exposure of secrets, tokens, and credentials.
- */
 export class SensitiveDataMasker {
   private static readonly SENSITIVE_KEYS = new Set([
     'password',
@@ -23,13 +19,6 @@ export class SensitiveDataMasker {
 
   private static readonly MASK_SUFFIX = '***'
 
-  /**
-   * Masks sensitive values in a data object.
-   * Recursively processes nested objects.
-   *
-   * @param data - The data object to mask
-   * @returns A new object with sensitive values masked
-   */
   static mask<T extends Record<string, unknown>>(data: T): T {
     if (!data || typeof data !== 'object') {
       return data
@@ -56,11 +45,6 @@ export class SensitiveDataMasker {
     return masked as T
   }
 
-  /**
-   * Masks a single value, showing only the first 4 characters.
-   * @param value - The value to mask
-   * @returns The masked value
-   */
   static maskValue(value: unknown): string {
     if (value === null || value === undefined) {
       return SensitiveDataMasker.MASK_SUFFIX
@@ -74,19 +58,10 @@ export class SensitiveDataMasker {
     return `${strValue.substring(0, 4)}${SensitiveDataMasker.MASK_SUFFIX}`
   }
 
-  /**
-   * Checks if a key should be treated as sensitive.
-   * @param key - The key to check (should be lowercase)
-   */
   private static isSensitiveKey(key: string): boolean {
     return SensitiveDataMasker.SENSITIVE_KEYS.has(key)
   }
 
-  /**
-   * Adds custom sensitive keys to the list.
-   * Useful for domain-specific sensitive data.
-   * @param keys - Array of key names to treat as sensitive
-   */
   static addSensitiveKeys(keys: string[]): void {
     for (const key of keys) {
       SensitiveDataMasker.SENSITIVE_KEYS.add(key.toLowerCase())

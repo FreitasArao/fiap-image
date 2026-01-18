@@ -4,19 +4,19 @@ import { VideoRepositoryImpl } from '@modules/video-processor/infra/repositories
 import { UploadVideoParts } from '@modules/video-processor/infra/services/aws/s3/upload-video-parts'
 import { StatusMap, t } from 'elysia'
 
-/**
- * Route: POST /videos
- * Creates a new video and initiates multipart upload.
- * Returns videoId and uploadId (no URLs yet - use upload-urls route for that).
- */
 export const createVideoRoute = BaseElysia.create({ prefix: '' }).post(
   '/',
   async ({ body, logger, set }) => {
+    logger.log('Creating video', {
+      totalSize: body.totalSize,
+      duration: body.duration,
+    })
     const { totalSize, duration } = body
 
     const useCase = new CreateVideoUseCase(
       new VideoRepositoryImpl(logger),
       new UploadVideoParts(logger),
+      logger,
     )
 
     const result = await useCase.execute({

@@ -1,8 +1,6 @@
 import { Result } from '@core/domain/result'
-import {
-  Video,
-  type UploadProgress,
-} from '@modules/video-processor/domain/entities/video'
+import { Video } from '@modules/video-processor/domain/entities/video'
+
 import type { VideoRepository } from '@modules/video-processor/domain/repositories/video.repository'
 
 export type ReportPartUploadParams = {
@@ -19,10 +17,6 @@ export type ReportPartUploadResult = {
   }
 }
 
-/**
- * Use case for reporting a part upload.
- * Client calls this after successfully uploading a part to S3 with the ETag.
- */
 export class ReportPartUploadUseCase {
   constructor(
     private readonly videoRepository: Pick<
@@ -31,12 +25,25 @@ export class ReportPartUploadUseCase {
     >,
   ) {}
 
+  private async handleTransitionToUploading(
+    video: Video,
+  ): Promise<Result<void, Error>> {
+    const transitionResult = video.startUploading()
+    if (transitionResult.isFailure) {
+      return Result.fail(transitionResult.error)
+    }
+    const response = await this.videoRepository.updateVideo(video)
+    if (response.isFailure) {
+      return Result.fail(response.error)
+    }
+    return Result.ok(undefined)
+  }
+
   async execute(
     params: ReportPartUploadParams,
   ): Promise<Result<ReportPartUploadResult, Error>> {
     const { videoId, partNumber, etag } = params
 
-    // Find the video
     const videoResult = await this.videoRepository.findById(videoId)
     if (videoResult.isFailure) {
       return Result.fail(videoResult.error)
@@ -47,7 +54,6 @@ export class ReportPartUploadUseCase {
       return Result.fail(new Error(`Video not found: ${videoId}`))
     }
 
-    // Verify video is in uploading state
     if (!video.status.isUploading() && video.status.value !== 'CREATED') {
       return Result.fail(
         new Error(
@@ -56,28 +62,19 @@ export class ReportPartUploadUseCase {
       )
     }
 
-    // Mark the part as uploaded
-    video.markPartAsUploaded(partNumber, etag)
-
-    // If this was the first part reported and status is CREATED, transition to UPLOADING
     if (video.status.value === 'CREATED') {
-      const transitionResult = video.startUploading()
-      if (transitionResult.isFailure) {
-        return Result.fail(transitionResult.error)
-      }
-      await this.videoRepository.updateVideo(video)
+      const transitionResult = await this.handleTransitionToUploading(video)
+      if (transitionResult.isFailure) return Result.fail(transitionResult.error)
     }
 
-    // Update the part in the database
+    video.markPartAsUploaded(partNumber, etag)
+
     const updateResult = await this.videoRepository.updateVideoPart(
       video,
       partNumber,
     )
-    if (updateResult.isFailure) {
-      return Result.fail(updateResult.error)
-    }
+    if (updateResult.isFailure) return Result.fail(updateResult.error)
 
-    // Return progress
     const progress = video.getUploadProgress()
 
     return Result.ok({

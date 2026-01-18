@@ -21,7 +21,23 @@ export class DataSource {
     if (!DataSource.instance) {
       DataSource.instance = new DataSource(logger)
     }
+
     return DataSource.instance
+  }
+
+  async isConnected(): Promise<Result<boolean, DatabaseConnectionError>> {
+    try {
+      await this.client.execute('SELECT now() FROM system.local')
+      return Result.ok(true)
+    } catch (error) {
+      return Result.fail(
+        DatabaseConnectionError.create(
+          error instanceof Error
+            ? error.message
+            : 'Unkown error trying to check if database is connected',
+        ),
+      )
+    }
   }
 
   async connect(): Promise<Result<void, DatabaseConnectionError>> {
@@ -151,12 +167,6 @@ export class DataSource {
     }
   }
 
-  /**
-   * Executes a SELECT query and returns typed rows.
-   * @param query - The CQL query string
-   * @param params - Query parameters
-   * @returns Result containing array of typed rows
-   */
   async query<T>(
     query: string,
     params: unknown[],
@@ -169,7 +179,6 @@ export class DataSource {
       this.logger.log('Query executed successfully', {
         rowCount: result.rowLength,
       })
-      // Convert Row objects to plain objects
       const rows = result.rows.map((row) => {
         const obj: Record<string, unknown> = {}
         for (const key of Object.keys(row)) {

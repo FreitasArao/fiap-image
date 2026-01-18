@@ -11,9 +11,6 @@ export type GetUploadProgressResult = {
   progress: UploadProgress
 }
 
-/**
- * Use case for getting the current upload progress of a video.
- */
 export class GetUploadProgressUseCase {
   constructor(
     private readonly videoRepository: Pick<VideoRepository, 'findById'>,

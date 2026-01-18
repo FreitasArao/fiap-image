@@ -2,7 +2,6 @@ import { describe, it, expect } from 'bun:test'
 import { VideoFactory } from './factories/video.factory'
 import { VideoPart } from '@modules/video-processor/domain/entities/video-part'
 import { ThirdPartyIntegration } from '@modules/video-processor/domain/entities/third-party-integration.vo'
-import { UniqueEntityID } from '@modules/video-processor/domain/value-objects/unique-entity-id.vo'
 
 describe('Video Entity', () => {
   it('should start with CREATED status', () => {

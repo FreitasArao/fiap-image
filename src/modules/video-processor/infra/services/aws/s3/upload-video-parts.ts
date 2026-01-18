@@ -10,7 +10,12 @@ export type UploadVideoPartsParams = {
   numberOfParts: number
 }
 
-export class UploadVideoParts extends BaseS3Service {
+import { UploadVideoPartsService } from '@modules/video-processor/domain/services/upload-video-parts.service.interface'
+
+export class UploadVideoParts
+  extends BaseS3Service
+  implements UploadVideoPartsService
+{
   get bucketName(): string {
     return 'fiapx-video-parts'
   }
@@ -18,12 +23,16 @@ export class UploadVideoParts extends BaseS3Service {
   async createUploadId(
     videoId: string,
   ): Promise<Result<{ uploadId: string; key: string }, Error>> {
+    this.logger.log('Creating upload ID for video', { videoId })
     return this.startMultipartUpload(videoId)
   }
 
   async execute(
     params: UploadVideoPartsParams,
   ): Promise<Result<string[], Error>> {
+    this.logger.log('Creating part upload URLs for video', {
+      videoId: params.videoId,
+    })
     if (params.start <= 0)
       return Result.fail(new Error('Start must be greater than 0'))
 
@@ -38,11 +47,18 @@ export class UploadVideoParts extends BaseS3Service {
     )
 
     const hasSomeError = uploadIds.some((uploadId) => uploadId.isFailure)
-    if (hasSomeError)
+    if (hasSomeError) {
+      this.logger.error('Failed to create part upload URLs', {
+        videoId: params.videoId,
+      })
       return Result.fail(new Error('Failed to create part upload URLs'))
+    }
 
     const partUploadUrls = uploadIds.map((uploadId) => uploadId.value.url)
-
+    this.logger.log('Part upload URLs created', {
+      videoId: params.videoId,
+      partUploadUrls,
+    })
     return Result.ok(partUploadUrls)
   }
 }

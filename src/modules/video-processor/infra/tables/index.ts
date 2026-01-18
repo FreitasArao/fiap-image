@@ -43,14 +43,14 @@ export type VideoByUserTable = {
 
 // Tabela: video_parts
 // Query: SELECT * FROM video_parts WHERE video_id = ?
+// third_party_video_part_id armazena o identificador do provedor (ex: ETag do S3)
 export type VideoPartsTable = {
   video_id: string
   part_number: number
   size: number
-  third_party_video_part_id: string
+  third_party_video_part_id: string // Armazena etag para S3
   url: string
   status: PartStatus
-  etag?: string
   uploaded_at?: Date
   created_at: Date
   updated_at: Date
