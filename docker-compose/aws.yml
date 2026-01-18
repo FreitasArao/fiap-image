@@ -4,7 +4,7 @@ services:
     ports:
       - "4566:4566"
     environment:
-      - SERVICES=s3,events,sqs
+      - SERVICES=s3,events,sqs,ses
       - AWS_DEFAULT_REGION=us-east-1
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
@@ -83,5 +83,20 @@ services:
               }
             }
           ]'
+
+        echo "=== Configurando SES ==="
+        # Verificar identidade de email (auto-verificado no LocalStack)
+        aws --endpoint-url=http://localstack:4566 ses verify-email-identity \
+          --email-address noreply@fiapx.local
+
+        aws --endpoint-url=http://localstack:4566 ses verify-email-identity \
+          --email-address notifications@fiapx.local
+
+        # Verificar domínio (auto-verificado no LocalStack)
+        aws --endpoint-url=http://localstack:4566 ses verify-domain-identity \
+          --domain fiapx.local
+
+        echo "=== Listando identidades SES verificadas ==="
+        aws --endpoint-url=http://localstack:4566 ses list-identities
 
         echo "=== Setup concluido ==="
