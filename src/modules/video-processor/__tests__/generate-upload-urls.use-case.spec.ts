@@ -6,6 +6,7 @@ import { VideoFactory } from './factories/video.factory'
 import { VideoPart } from '@modules/video-processor/domain/entities/video-part'
 import { ThirdPartyIntegration } from '@modules/video-processor/domain/entities/third-party-integration.vo'
 import { Result } from '@core/domain/result'
+import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 
 // Mock UploadVideoParts
 const mockUploadService = {
@@ -16,13 +17,23 @@ const mockUploadService = {
   bucketName: 'bucket',
 } as unknown as UploadVideoParts
 
+// Mock Logger
+const mockLogger = {
+  log: mock(() => {}),
+  error: mock(() => {}),
+  warn: mock(() => {}),
+  debug: mock(() => {}),
+  verbose: mock(() => {}),
+  withContext: mock(() => mockLogger),
+} as unknown as AbstractLoggerService
+
 describe('GenerateUploadUrlsUseCase', () => {
   let useCase: GenerateUploadUrlsUseCase
   let videoRepository: InMemoryVideoRepository
 
   beforeEach(() => {
     videoRepository = new InMemoryVideoRepository()
-    useCase = new GenerateUploadUrlsUseCase(videoRepository, mockUploadService)
+    useCase = new GenerateUploadUrlsUseCase(videoRepository, mockUploadService, mockLogger)
   })
 
   it('should generate URLs for parts without them', async () => {
