@@ -63,3 +63,11 @@ export type VideoByThirdPartyIdTable = {
   integration_name: string
   video_id: string
 }
+
+// Tabela: video_by_object_key (lookup reverso por path do S3)
+// Query: SELECT * FROM video_by_object_key WHERE object_key = ?
+export type VideoByObjectKeyTable = {
+  object_key: string
+  bucket_name: string
+  video_id: string
+}

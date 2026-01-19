@@ -26,7 +26,9 @@ class TestConsumer extends AbstractSQSConsumer<{ id: string }> {
   protected async onError(
     _error: Error,
     _message: { id: string } | null,
-  ): Promise<void> {}
+  ): Promise<'retry' | 'discard'> {
+    return 'discard'
+  }
 }
 
 describe('AbstractSQSConsumer', () => {
@@ -122,7 +124,7 @@ describe('AbstractSQSConsumer', () => {
     })
   })
 
-  it('should change visibility to 0 on nack', async () => {
+  it('should change visibility timeout on nack (default 60s)', async () => {
     sqsMock.on(ChangeMessageVisibilityCommand).resolves({})
 
     await consumer.nack('receipt-handle-456')
@@ -132,7 +134,21 @@ describe('AbstractSQSConsumer', () => {
     expect(calls[0].args[0].input).toEqual({
       QueueUrl: 'http://queue.url',
       ReceiptHandle: 'receipt-handle-456',
-      VisibilityTimeout: 0,
+      VisibilityTimeout: 60,
+    })
+  })
+
+  it('should change visibility timeout on nack with custom timeout', async () => {
+    sqsMock.on(ChangeMessageVisibilityCommand).resolves({})
+
+    await consumer.nack('receipt-handle-789', 120)
+
+    const calls = sqsMock.commandCalls(ChangeMessageVisibilityCommand)
+    expect(calls.length).toBe(1)
+    expect(calls[0].args[0].input).toEqual({
+      QueueUrl: 'http://queue.url',
+      ReceiptHandle: 'receipt-handle-789',
+      VisibilityTimeout: 120,
     })
   })
 })

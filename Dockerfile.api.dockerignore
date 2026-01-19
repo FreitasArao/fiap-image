@@ -1,0 +1,49 @@
+# ===========================================
+# Dockerfile.api.dockerignore
+# Contexto de build para API de PRODUÇÃO
+# ===========================================
+
+# Dependências (instaladas no build)
+node_modules
+
+# Arquivos de build/config do Docker
+Dockerfile*
+docker-compose*
+.dockerignore*
+
+# Controle de versão
+.git
+.gitignore
+
+# Documentação (não necessária em runtime)
+README.md
+LICENSE
+docs/
+
+# IDEs e editores
+.vscode
+.idea
+.editorconfig
+.cursor
+
+# Ambiente local
+.env
+.env.*
+
+# Testes e cobertura (executados no build, não copiados)
+coverage*
+*.spec.ts
+*.test.ts
+__tests__/
+
+# Ferramentas
+Makefile
+helm-charts
+biome.json
+bunfig.toml
+
+# ==========================================
+# MÓDULO WORKERS - Deploy independente
+# Não deve estar na imagem da API
+# ==========================================
+workers/

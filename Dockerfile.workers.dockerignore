@@ -1,0 +1,63 @@
+# ===========================================
+# Dockerfile.workers.dockerignore
+# Contexto de build para WORKERS (Split/Print)
+# ===========================================
+
+# Dependências (instaladas no build)
+node_modules
+
+# Arquivos de build/config do Docker
+Dockerfile*
+docker-compose*
+.dockerignore*
+
+# Controle de versão
+.git
+.gitignore
+
+# Documentação
+README.md
+LICENSE
+docs/
+
+# IDEs e editores
+.vscode
+.idea
+.editorconfig
+.cursor
+
+# Ambiente local
+.env
+.env.*
+
+# Cobertura de testes
+coverage*
+**/__tests__/
+
+# Ferramentas não necessárias em runtime
+Makefile
+helm-charts
+biome.json
+bunfig.toml
+
+# ==========================================
+# MÓDULOS DA API - Workers não precisam
+# ==========================================
+src/modules/video-processor/
+src/modules/docs/
+src/modules/telemetry/
+src/modules/logging/
+src/core/domain/
+src/core/errors/
+src/core/libs/database/
+src/core/libs/elysia.ts
+src/index.ts
+
+# ==========================================
+# WORKERS PRECISAM APENAS DE:
+# - workers/src/
+# - src/core/libs/logging/
+# - src/core/abstractions/messaging/
+# - src/modules/messaging/sqs/
+# - package.json, bun.lock, tsconfig.json
+# ==========================================

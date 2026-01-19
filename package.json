@@ -4,12 +4,15 @@
   "scripts": {
     "test": "bun test",
     "dev": "NODE_ENV=development bun run --watch src/index.ts",
+    "worker:split": "bun run workers/src/split-worker.ts",
+    "worker:print": "bun run workers/src/print-worker.ts",
     "coverage": "bun test --coverage",
     "lint:watch": "biome format --watch",
     "lint": "biome format",
     "lint:check": "biome check"
   },
   "dependencies": {
+    "@aws-sdk/client-eventbridge": "^3.971.0",
     "@aws-sdk/client-s3": "^3.971.0",
     "@aws-sdk/client-sqs": "^3.971.0",
     "@aws-sdk/s3-request-presigner": "^3.971.0",

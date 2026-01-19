@@ -3,7 +3,7 @@ services:
     container_name: api
     build:
       context: ../
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile.api.dev
     environment:
       - CASSANDRA_CONTACT_POINTS=${CASSANDRA_CONTACT_POINTS}
       - CASSANDRA_KEYSPACE=${CASSANDRA_KEYSPACE}

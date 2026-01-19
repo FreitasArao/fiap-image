@@ -1,0 +1,24 @@
+# ===========================================
+# Dockerfile.api.dev.dockerignore
+# Contexto de build para API de DESENVOLVIMENTO
+# ===========================================
+
+# Dependências (instaladas no build, montadas via volume)
+node_modules
+
+# Arquivos de build/config do Docker
+Dockerfile*
+docker-compose*
+.dockerignore*
+
+# Controle de versão
+.git
+
+# ==========================================
+# MÓDULO WORKERS - Deploy independente
+# Não deve estar na imagem da API
+# ==========================================
+workers/
+
+# Nota: Em dev, mantemos docs/, .vscode, etc para
+# facilitar desenvolvimento com volumes montados

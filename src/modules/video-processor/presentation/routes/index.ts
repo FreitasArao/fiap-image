@@ -5,6 +5,7 @@ import { progressRoute } from './progress.route'
 import { completeUploadRoute } from './complete-upload.route'
 import { uploadUrlsRoute } from './upload-urls.route'
 import { simulateRoutes } from './simulate'
+import { webhookS3CompleteRoute } from './webhook-s3-complete.route'
 
 export const videoProcessorRoutes = BaseElysia.create({ prefix: 'videos' })
   .use(createVideoRoute)
@@ -13,3 +14,4 @@ export const videoProcessorRoutes = BaseElysia.create({ prefix: 'videos' })
   .use(progressRoute)
   .use(completeUploadRoute)
   .use(simulateRoutes)
+  .use(webhookS3CompleteRoute)

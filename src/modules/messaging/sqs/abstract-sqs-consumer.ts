@@ -21,11 +21,16 @@ export abstract class AbstractSQSConsumer<
 
   protected abstract parseMessage(message: Message): TMessage
   protected abstract handleMessage(message: TMessage): Promise<void>
+
+  /**
+   * Handle errors during message processing.
+   * @returns 'retry' to requeue with backoff, 'discard' to delete message permanently
+   */
   protected abstract onError(
     error: Error,
     message: TMessage | null,
     rawMessage?: Message,
-  ): Promise<void>
+  ): Promise<'retry' | 'discard'>
 
   async start(): Promise<void> {
     this.logger.log(`Starting SQS consumer for queue: ${this.maskQueueUrl()}`)
@@ -35,11 +40,17 @@ export abstract class AbstractSQSConsumer<
         await this.handleMessage(message)
         await this.ack(receiptHandle)
       } catch (error) {
-        await this.onError(
+        const action = await this.onError(
           error instanceof Error ? error : new Error(String(error)),
           message,
         )
-        await this.nack(receiptHandle)
+
+        if (action === 'discard') {
+          this.logger.warn('Discarding message due to non-retryable error')
+          await this.ack(receiptHandle)
+        } else {
+          await this.nack(receiptHandle, 60) // Retry after 60 seconds
+        }
       }
     }
   }
@@ -80,6 +91,7 @@ export abstract class AbstractSQSConsumer<
               messageId: message.MessageId,
             })
             await this.onError(error, null, message)
+            // Parse errors are not retryable - discard the message
             await this.ack(message.ReceiptHandle)
             continue
           }
@@ -101,11 +113,19 @@ export abstract class AbstractSQSConsumer<
     await this.sqsClient.send(command)
   }
 
-  async nack(receiptHandle: string): Promise<void> {
+  /**
+   * Negative acknowledgment - message will be reprocessed after visibility timeout.
+   * @param receiptHandle - Receipt handle from the message
+   * @param visibilityTimeoutSeconds - Time before message becomes visible again (default: 60s)
+   */
+  async nack(
+    receiptHandle: string,
+    visibilityTimeoutSeconds: number = 60,
+  ): Promise<void> {
     const command = new ChangeMessageVisibilityCommand({
       QueueUrl: this.queueUrl,
       ReceiptHandle: receiptHandle,
-      VisibilityTimeout: 0,
+      VisibilityTimeout: visibilityTimeoutSeconds,
     })
     await this.sqsClient.send(command)
   }

@@ -8,6 +8,7 @@ import type {
   VideoByUserTable,
   VideoPartsTable,
   VideoByThirdPartyIdTable,
+  VideoByObjectKeyTable,
 } from '../tables'
 
 import { Video } from '@modules/video-processor/domain/entities/video'
@@ -83,6 +84,32 @@ export class VideoRepositoryImpl
     } catch (error) {
       this.logger.error('Failed to find video by integration id', {
         integrationId,
+        error,
+      })
+      return Result.fail(error as Error)
+    }
+  }
+
+  async findByObjectKey(
+    objectKey: string,
+  ): Promise<Result<Video | null, Error>> {
+    this.logger.log('Finding video by Object Key', { objectKey })
+    try {
+      const lookupResult = await this.select<VideoByObjectKeyTable>({
+        table: 'video_by_object_key',
+        where: { object_key: objectKey },
+      })
+
+      if (lookupResult.isFailure) return Result.fail(lookupResult.error)
+
+      const rows = lookupResult.value
+      if (!rows || rows.length === 0) return Result.ok(null)
+
+      // Found videoId, delegate to findById
+      return this.findById(rows[0].video_id)
+    } catch (error) {
+      this.logger.error('Failed to find video by object key', {
+        objectKey,
         error,
       })
       return Result.fail(error as Error)
@@ -190,6 +217,11 @@ export class VideoRepositoryImpl
         third_party_video_id: video.thirdPartyVideoIntegration.value.id,
         video_id: video.id.value,
       }),
+      this.createVideoByObjectKey({
+        object_key: video.thirdPartyVideoIntegration.value.path,
+        bucket_name: video.thirdPartyVideoIntegration.value.bucket,
+        video_id: video.id.value,
+      }),
       this.createVideoParts(video),
     ])
     this.logger.log('Video created and synched with user', {
@@ -242,6 +274,16 @@ export class VideoRepositoryImpl
   ): Promise<Result<void, DatabaseExecutionError>> {
     const result = await this.insert<VideoByThirdPartyIdTable>({
       table: 'video_by_third_party_id',
+      data: lookup,
+    })
+    return result.isSuccess ? Result.ok(undefined) : Result.fail(result.error)
+  }
+
+  async createVideoByObjectKey(
+    lookup: VideoByObjectKeyTable,
+  ): Promise<Result<void, DatabaseExecutionError>> {
+    const result = await this.insert<VideoByObjectKeyTable>({
+      table: 'video_by_object_key',
       data: lookup,
     })
     return result.isSuccess ? Result.ok(undefined) : Result.fail(result.error)

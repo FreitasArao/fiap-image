@@ -36,26 +36,53 @@ services:
       - |
         set -e
 
-        echo "=== Criando bucket ==="
+        echo "=== Criando buckets ==="
         aws --endpoint-url=http://localstack:4566 s3 mb s3://fiapx-video-parts || true
+        aws --endpoint-url=http://localstack:4566 s3 mb s3://fiapx-video-frames || true
 
         echo "=== Habilitando EventBridge no bucket ==="
         aws --endpoint-url=http://localstack:4566 s3api put-bucket-notification-configuration \
           --bucket fiapx-video-parts \
           --notification-configuration '{ "EventBridgeConfiguration": {} }'
 
-        echo "=== Criando fila SQS ==="
-        aws --endpoint-url=http://localstack:4566 sqs create-queue \
-          --queue-name multipart-complete-queue
 
-        echo "=== Configurando permissao da fila para EventBridge ==="
-        aws --endpoint-url=http://localstack:4566 sqs set-queue-attributes \
-          --queue-url http://localstack:4566/000000000000/multipart-complete-queue \
+        # Fila para processamento de split (FFmpeg)
+        aws --endpoint-url=http://localstack:4566 sqs create-queue \
+          --queue-name split-queue \
           --attributes '{
-            "Policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"events.amazonaws.com\"},\"Action\":\"sqs:SendMessage\",\"Resource\":\"arn:aws:sqs:us-east-1:000000000000:multipart-complete-queue\"}]}"
+            "VisibilityTimeout": "300",
+            "MessageRetentionPeriod": "86400"
           }'
 
-        echo "=== Criando rule EventBridge ==="
+        # Fila para processamento de print/frames (FFmpeg)
+        aws --endpoint-url=http://localstack:4566 sqs create-queue \
+          --queue-name print-queue \
+          --attributes '{
+            "VisibilityTimeout": "600",
+            "MessageRetentionPeriod": "86400"
+          }'
+
+        # DLQ para mensagens com falha
+        aws --endpoint-url=http://localstack:4566 sqs create-queue \
+          --queue-name processing-dlq
+
+        echo "=== Configurando permissao das filas para EventBridge ==="
+        aws --endpoint-url=http://localstack:4566 sqs set-queue-attributes \
+          --queue-url http://localstack:4566/000000000000/split-queue \
+          --attributes '{
+            "Policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"events.amazonaws.com\"},\"Action\":\"sqs:SendMessage\",\"Resource\":\"arn:aws:sqs:us-east-1:000000000000:split-queue\"}]}"
+          }'
+
+        aws --endpoint-url=http://localstack:4566 sqs set-queue-attributes \
+          --queue-url http://localstack:4566/000000000000/print-queue \
+          --attributes '{
+            "Policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"events.amazonaws.com\"},\"Action\":\"sqs:SendMessage\",\"Resource\":\"arn:aws:sqs:us-east-1:000000000000:print-queue\"}]}"
+          }'
+
+        # EVENTBRIDGE RULES
+        echo "=== Criando EventBridge rules ==="
+
+        # Rule 1: S3 CompleteMultipartUpload -> multipart-complete-queue
         aws --endpoint-url=http://localstack:4566 events put-rule \
           --name multipart-complete-rule \
           --event-pattern '{
@@ -67,13 +94,70 @@ services:
             }
           }'
 
-        echo "=== Ligando rule a fila SQS com InputTransformer ==="
+        # Rule 2: Video UPLOADED -> split-queue
+        aws --endpoint-url=http://localstack:4566 events put-rule \
+          --name video-uploaded-rule \
+          --event-pattern '{
+            "source": ["fiapx.video"],
+            "detail-type": ["Video Status Changed"],
+            "detail": {
+              "status": ["UPLOADED"]
+            }
+          }'
+
+        # Rule 3: Video SPLITTING -> print-queue
+        aws --endpoint-url=http://localstack:4566 events put-rule \
+          --name video-splitting-rule \
+          --event-pattern '{
+            "source": ["fiapx.video"],
+            "detail-type": ["Video Status Changed"],
+            "detail": {
+              "status": ["SPLITTING"]
+            }
+          }'
+
+        # Rule 4: Video status changes for notifications (SPLITTING, COMPLETED, FAILED)
+        aws --endpoint-url=http://localstack:4566 events put-rule \
+          --name video-notification-rule \
+          --event-pattern '{
+            "source": ["fiapx.video"],
+            "detail-type": ["Video Status Changed"],
+            "detail": {
+              "status": ["SPLITTING", "COMPLETED", "FAILED"]
+            }
+          }'
+
+        # ============================================
+        # EVENTBRIDGE TARGETS
+        # ============================================
+        echo "=== Configurando targets do EventBridge ==="
+
+        # ============================================
+        # API DESTINATION para webhook S3 Complete
+        # ============================================
+        echo "=== Criando API Connection e Destination ==="
+
+        # Criar Connection (autenticação básica dummy para LocalStack)
+        aws --endpoint-url=http://localstack:4566 events create-connection \
+          --name fiapx-api-connection \
+          --authorization-type API_KEY \
+          --auth-parameters '{"ApiKeyAuthParameters": {"ApiKeyName": "x-api-key", "ApiKeyValue": "localstack-dev"}}' || true
+
+        # Criar API Destination
+        aws --endpoint-url=http://localstack:4566 events create-api-destination \
+          --name fiapx-s3-complete-webhook \
+          --connection-arn arn:aws:events:us-east-1:000000000000:connection/fiapx-api-connection \
+          --invocation-endpoint http://api:3010/videos/webhooks/s3/complete-multipart \
+          --http-method POST \
+          --invocation-rate-limit-per-second 10 || true
+
+        # Target: S3 CompleteMultipart -> API Webhook
         aws --endpoint-url=http://localstack:4566 events put-targets \
           --rule multipart-complete-rule \
           --targets '[
             {
-              "Id": "sqs-target",
-              "Arn": "arn:aws:sqs:us-east-1:000000000000:multipart-complete-queue",
+              "Id": "api-webhook-target",
+              "Arn": "arn:aws:events:us-east-1:000000000000:api-destination/fiapx-s3-complete-webhook",
               "InputTransformer": {
                 "InputPathsMap": {
                   "bucket": "$.detail.bucket.name",
@@ -84,19 +168,71 @@ services:
             }
           ]'
 
+        # Target: Video UPLOADED -> split-queue
+        aws --endpoint-url=http://localstack:4566 events put-targets \
+          --rule video-uploaded-rule \
+          --targets '[
+            {
+              "Id": "split-queue-target",
+              "Arn": "arn:aws:sqs:us-east-1:000000000000:split-queue"
+            }
+          ]'
+
+        # Target: Video SPLITTING -> print-queue
+        aws --endpoint-url=http://localstack:4566 events put-targets \
+          --rule video-splitting-rule \
+          --targets '[
+            {
+              "Id": "print-queue-target",
+              "Arn": "arn:aws:sqs:us-east-1:000000000000:print-queue"
+            }
+          ]'
+
+        # ============================================
+        # SES (Email)
+        # ============================================
         echo "=== Configurando SES ==="
-        # Verificar identidade de email (auto-verificado no LocalStack)
         aws --endpoint-url=http://localstack:4566 ses verify-email-identity \
           --email-address noreply@fiapx.local
 
         aws --endpoint-url=http://localstack:4566 ses verify-email-identity \
           --email-address notifications@fiapx.local
 
-        # Verificar domínio (auto-verificado no LocalStack)
         aws --endpoint-url=http://localstack:4566 ses verify-domain-identity \
           --domain fiapx.local
 
-        echo "=== Listando identidades SES verificadas ==="
-        aws --endpoint-url=http://localstack:4566 ses list-identities
+        # Criar templates de email
+        echo "=== Criando templates SES ==="
+        aws --endpoint-url=http://localstack:4566 ses create-template \
+          --template '{
+            "TemplateName": "VideoQuaseFinalizado",
+            "SubjectPart": "Seu video esta quase pronto!",
+            "HtmlPart": "<h1>Ola {{email}}</h1><p>Seu video <strong>{{videoName}}</strong> esta quase pronto!</p><p>Estamos gerando as imagens...</p>",
+            "TextPart": "Ola {{email}}, seu video {{videoName}} esta quase pronto!"
+          }' || true
+
+        aws --endpoint-url=http://localstack:4566 ses create-template \
+          --template '{
+            "TemplateName": "VideoConcluido",
+            "SubjectPart": "Seu video esta pronto!",
+            "HtmlPart": "<h1>Ola {{email}}</h1><p>Seu video <strong>{{videoName}}</strong> foi processado!</p><p><a href=\"{{downloadUrl}}\">Clique aqui para download</a></p>",
+            "TextPart": "Ola {{email}}, seu video {{videoName}} esta pronto! Download: {{downloadUrl}}"
+          }' || true
+
+        aws --endpoint-url=http://localstack:4566 ses create-template \
+          --template '{
+            "TemplateName": "VideoFalhou",
+            "SubjectPart": "Erro ao processar seu video",
+            "HtmlPart": "<h1>Ola {{email}}</h1><p>Houve um erro ao processar <strong>{{videoName}}</strong>.</p><p>Motivo: {{errorReason}}</p>",
+            "TextPart": "Ola {{email}}, houve um erro ao processar {{videoName}}. Motivo: {{errorReason}}"
+          }' || true
+
+        echo "=== Listando recursos criados ==="
+        echo "Filas SQS:"
+        aws --endpoint-url=http://localstack:4566 sqs list-queues
+        echo "Rules EventBridge:"
+        aws --endpoint-url=http://localstack:4566 events list-rules
+        echo "Templates SES:"
+        aws --endpoint-url=http://localstack:4566 ses list-templates
 
         echo "=== Setup concluido ==="
