@@ -1,5 +1,6 @@
 import { DataSource } from '@core/libs/database/datasource'
 import { BaseElysia } from '@core/libs/elysia'
+import cors from '@elysiajs/cors'
 import { docs } from '@modules/docs'
 import { logger } from '@modules/logging'
 import { telemetry } from '@modules/telemetry'
@@ -19,6 +20,13 @@ const app = BaseElysia.create()
   .onStop(shutdown)
   .use(telemetry)
   .use(docs)
+  .use(
+    cors({
+      origin: '*',
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+    }),
+  )
   .use(videoProcessorRoutes)
   .get('/health', async ({ set }) => {
     const database = await datasource.isConnected()

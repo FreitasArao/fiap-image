@@ -1,11 +1,10 @@
-@startuml HLD-Flow
+@startuml HLD-Flow-Blocks
 !include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
 !include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
 
 LAYOUT_LEFT_RIGHT()
 HIDE_STEREOTYPE()
-
-title Processamento de Vídeo - Arquitetura Final\n(EventBridge + SQS + KEDA)
+title Processamento de Vídeo - Arquitetura Final\n(organizado em blocos de fluxos — réplicas para evitar linhas entrelaçadas)
 
 ' =====================================
 ' LEGENDA
@@ -18,114 +17,120 @@ legend right
   | <#FF9900> | Banco de Dados |
 endlegend
 
-' =====================================
-' ACTORS
-' =====================================
 Person(user, "Usuário", "Envia vídeos para processamento")
 
-' =====================================
-' FASE 1: AUTENTICAÇÃO
-' =====================================
-System_Boundary(auth, "1. Autenticação") {
-    Container(cognito, "Cognito", "AWS", "Auth OTP")
+' -----------------------
+' BLOCO A: AUTENTICAÇÃO
+' -----------------------
+System_Boundary(block_auth, "BLOCO A — Autenticação") {
+  Container(cognito_A, "Cognito", "AWS", "Auth OTP")
 }
+Rel(user, cognito_A, "0. Login OTP")
+Rel(cognito_A, user, "JWT")
 
-' =====================================
-' FASE 2: API
-' =====================================
-System_Boundary(api, "2. FIAPX API") {
-    Container(apiVideos, "POST /videos", "Elysia", "Cria vídeo")
-    Container(apiUrls, "GET /upload-urls", "Elysia", "Batch 20 URLs")
-    Container(apiParts, "POST /parts/{n}", "Elysia", "Reporta ETag")
-    Container(apiComplete, "POST /complete", "Elysia", "Finaliza upload")
+' -----------------------
+' BLOCO B: UPLOAD (API)
+' -----------------------
+System_Boundary(block_upload, "BLOCO B — Upload / API") {
+  Container(apiVideos_B, "POST /videos", "Elysia", "Cria vídeo")
+  Container(apiUrls_B, "GET /upload-urls", "Elysia", "Batch 20 URLs")
+  Container(apiParts_B, "POST /parts/{n}", "Elysia", "Reporta ETag")
+  Container(apiComplete_B, "POST /complete", "Elysia", "Finaliza upload")
+  Container(apiWebhook_B, "POST /webhooks/s3", "Elysia", "Recebe eventos S3")
+  ContainerDb(s3Videos_B, "S3 Videos", "S3", "Vídeos originais")
+  ContainerDb(s3Frames_B, "S3 Frames", "S3", "Frames extraídos")
+  ContainerDb(cassandra_B, "ScyllaDB", "CQL", "Status vídeo")
 }
+' Upload flow localized (short, no crossings)
+Rel(user, apiVideos_B, "1. Cria vídeo")
+Rel(apiVideos_B, s3Videos_B, "CreateMultipartUpload")
+Rel(apiVideos_B, cassandra_B, "CREATED")
 
-' =====================================
-' FASE 3: STORAGE
-' =====================================
-System_Boundary(storage, "3. Storage") {
-    ContainerDb(s3Videos, "S3 Videos", "S3", "Vídeos originais")
-    ContainerDb(s3Frames, "S3 Frames", "S3", "Frames extraídos")
+Rel(user, apiUrls_B, "2. Solicita URLs (batch 20)")
+Rel(apiUrls_B, s3Videos_B, "getSignedUrl")
+Rel(apiUrls_B, cassandra_B, "UPLOADING")
+
+Rel(user, s3Videos_B, "3. Upload partes direto")
+Rel(user, apiParts_B, "4. Reporta ETag")
+Rel(apiParts_B, cassandra_B, "Atualiza parte")
+
+Rel(user, apiComplete_B, "5. Finaliza")
+Rel(apiComplete_B, s3Videos_B, "CompleteMultipart")
+
+' -----------------------
+' BLOCO C: EVENT BUS / WEBHOOK
+' -----------------------
+System_Boundary(block_events, "BLOCO C — Event Bus / Webhook") {
+  Container(eventbridge_C, "EventBridge", "AWS", "Roteamento de eventos")
+  Container(apiDestWebhook_C, "API Destination", "EB", "Webhook S3 Complete")
+  Container(apiDestSES_C, "API Destination", "EB", "Notificação SES")
+  ContainerQueue(sqsSplit_C, "SQS Split", "SQS", "Fila split")
+  ContainerQueue(sqsPrint_C, "SQS Print", "SQS", "Fila print")
 }
+' Event routing localized
+Rel(s3Videos_B, eventbridge_C, "6. Object Created")
+Rel(eventbridge_C, apiDestWebhook_C, "Roteia para API")
+Rel(apiDestWebhook_C, apiWebhook_B, "POST webhook")
+Rel(apiWebhook_B, cassandra_B, "UPLOADED")
+Rel(apiWebhook_B, eventbridge_C, "7. Video Status Changed")
+Rel(eventbridge_C, sqsSplit_C, "Enfileira")
+Rel(eventbridge_C, sqsPrint_C, "Enfileira")
 
-' =====================================
-' FASE 4: EVENTOS
-' =====================================
-System_Boundary(events, "4. Event Bus") {
-    Container(eventbridge, "EventBridge", "AWS", "Roteamento")
-    ContainerQueue(sqsSplit, "SQS Split", "SQS", "Fila split")
-    ContainerQueue(sqsPrint, "SQS Print", "SQS", "Fila print")
+' -----------------------
+' BLOCO D: PROCESSAMENTO - SPLIT
+' -----------------------
+System_Boundary(block_split, "BLOCO D — Processamento (Split)") {
+  Container(kedaSplit_D, "Split Worker", "KEDA", "Consome SQS")
+  Container(jobSplit_D, "FFmpeg Split", "Job", "Divide vídeo")
+  ContainerDb(s3Videos_D, "S3 Videos (replica)", "S3", "Download/Read")
+  ContainerDb(cassandra_D, "ScyllaDB (replica)", "CQL", "Status vídeo")
 }
+Rel(sqsSplit_C, kedaSplit_D, "8. Poll")
+Rel(kedaSplit_D, jobSplit_D, "Cria Job")
+Rel(jobSplit_D, s3Videos_D, "Download")
+Rel(jobSplit_D, cassandra_D, "SPLITTING")
+Rel(jobSplit_D, eventbridge_C, "9. Status Changed")
 
-' =====================================
-' FASE 5: PROCESSAMENTO
-' =====================================
-System_Boundary(processing, "5. Kubernetes") {
-    Container(kedaSplit, "Split Worker", "KEDA", "Consome SQS")
-    Container(kedaPrint, "Print Worker", "KEDA", "Consome SQS")
-    Container(jobSplit, "FFmpeg Split", "Job", "Divide vídeo")
-    Container(jobPrint, "FFmpeg Print", "Job", "Extrai frames")
+' -----------------------
+' BLOCO E: PROCESSAMENTO - PRINT
+' -----------------------
+System_Boundary(block_print, "BLOCO E — Processamento (Print)") {
+  Container(kedaPrint_E, "Print Worker", "KEDA", "Consome SQS")
+  Container(jobPrint_E, "FFmpeg Print", "Job", "Extrai frames")
+  ContainerDb(s3Frames_E, "S3 Frames (replica)", "S3", "Salva frames")
+  ContainerDb(cassandra_E, "ScyllaDB (replica)", "CQL", "Status vídeo")
 }
+Rel(eventbridge_C, sqsPrint_C, "Enfileira")
+Rel(sqsPrint_C, kedaPrint_E, "10. Poll")
+Rel(kedaPrint_E, jobPrint_E, "Cria Job")
+Rel(jobPrint_E, s3Frames_E, "Salva frames")
+Rel(jobPrint_E, cassandra_E, "COMPLETED")
+Rel(jobPrint_E, eventbridge_C, "11. Status Changed")
 
-' =====================================
-' FASE 6: NOTIFICAÇÃO
-' =====================================
-System_Boundary(notify, "6. Notificações") {
-    Container(sns, "SNS", "AWS", "Fanout")
-    Container(lambdaEmail, "Lambda Email", "Lambda", "Envia email")
-    Container(lambdaSms, "Lambda SMS", "Lambda", "Envia SMS")
+' -----------------------
+' BLOCO F: NOTIFICAÇÃO (SES)
+' -----------------------
+System_Boundary(block_notify, "BLOCO F — Notificações (SES - Zero Lambda)") {
+  Container(apiDestSES_F, "API Destination", "EB", "Notificação SES (replica)")
+  Container(ses_F, "SES", "AWS", "Email Templates")
 }
+Rel(eventbridge_C, apiDestSES_F, "Roteia notificação")
+Rel(apiDestSES_F, ses_F, "12. SendTemplatedEmail")
+Rel_Back(ses_F, user, "Email: Quase lá / Concluído / Falha")
 
-' =====================================
-' DATABASE
-' =====================================
-ContainerDb(cassandra, "Cassandra", "DB", "Status vídeo")
-
-' =====================================
-' FLUXOS PRINCIPAIS
-' =====================================
-
-' Auth
-Rel(user, cognito, "0. Login OTP")
-Rel(cognito, user, "JWT")
-
-' Upload Flow
-Rel(user, apiVideos, "1. Cria vídeo")
-Rel(apiVideos, s3Videos, "CreateMultipartUpload")
-Rel(apiVideos, cassandra, "CREATED")
-
-Rel(user, apiUrls, "2. Solicita URLs")
-Rel(apiUrls, s3Videos, "getSignedUrl")
-Rel(apiUrls, cassandra, "UPLOADING")
-
-Rel(user, s3Videos, "3. Upload partes")
-Rel(user, apiParts, "4. Reporta ETag")
-Rel(apiParts, cassandra, "Atualiza parte")
-
-Rel(user, apiComplete, "5. Finaliza")
-Rel(apiComplete, s3Videos, "CompleteMultipart")
-
-' Event Flow
-Rel(s3Videos, eventbridge, "6. Object Created")
-Rel(eventbridge, sqsSplit, "Publica")
-
-' Processing Flow
-Rel(sqsSplit, kedaSplit, "7. Poll")
-Rel(kedaSplit, jobSplit, "Cria Job")
-Rel(jobSplit, s3Videos, "Download")
-Rel(jobSplit, sqsPrint, "Segmentos")
-Rel(jobSplit, cassandra, "SPLITTING")
-
-Rel(sqsPrint, kedaPrint, "8. Poll")
-Rel(kedaPrint, jobPrint, "Cria Job")
-Rel(jobPrint, s3Frames, "Salva frames")
-Rel(jobPrint, cassandra, "PRINTING")
-
-' Notification Flow
-Rel(s3Frames, eventbridge, "9. Frames OK")
-Rel(eventbridge, sns, "Publica")
-Rel(sns, lambdaEmail, "10. Invoke")
-Rel(sns, lambdaSms, "Invoke")
-Rel_Back(cassandra, apiComplete, "COMPLETED")
+' -----------------------
+' REFERÊNCIAS CENTRAIS (apenas para leitura e consistência visual)
+' -----------------------
+' Mantém uma visão central resumida (sem criar fluxos novos)
+System_Boundary(block_reference, "REFERÊNCIAS CENTRAIS (não modifica comportamento)") {
+  Container(cognito_ref, "Cognito", "AWS", "Auth OTP - ref")
+  Container(api_ref, "Elysia API", "Elysia", "POST/GET/parts/complete/webhooks - ref")
+  ContainerDb(s3_ref, "S3 Videos / Frames", "S3", "Storage - ref")
+  Container(eventbridge_ref, "EventBridge", "AWS", "Event Bus - ref")
+  ContainerQueue(sqs_ref, "SQS Split / Print", "SQS", "Filas - ref")
+  ContainerDb(cassandra_ref, "ScyllaDB", "CQL", "Status vídeo - ref")
+  Container(ses_ref, "SES", "AWS", "Email - ref")
+  Container(keda_ref, "KEDA Workers", "KEDA", "Workers - ref")
+}
 
 @enduml

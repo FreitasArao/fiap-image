@@ -45,59 +45,64 @@ class PrintWorker extends AbstractSQSConsumer<VideoEvent> {
   }
 
   protected async handleMessage(event: VideoEvent): Promise<void> {
-    const { videoId, videoPath, userEmail, videoName } = event.detail
-    const s3Key = videoPath || videoId
-
-    this.logger.log(`[PRINT] Processing video: ${videoId}`)
-
-    const ffmpeg = new FFmpegService(videoId)
-
     try {
-      await ffmpeg.setup()
+      const { videoId, videoPath, userEmail, videoName } = event.detail
+      const s3Key = videoPath || videoId
 
-      // Download video
-      this.logger.log(
-        `[PRINT] Downloading from s3://${this.inputBucket}/${s3Key}/`,
-      )
-      const inputPath = await ffmpeg.download(
-        this.inputBucket,
-        `${s3Key}/video.mp4`,
-      )
+      this.logger.log(`[PRINT] Processing video: ${videoId}`)
 
-      // Extract frames
-      this.logger.log(
-        `[PRINT] Extracting frames (1 every ${this.frameInterval}s)...`,
-      )
-      const { outputDir, count } = await ffmpeg.extractFrames(
-        inputPath,
-        this.frameInterval,
-      )
-      this.logger.log(`[PRINT] Extracted ${count} frames`)
+      const ffmpeg = new FFmpegService(videoId)
 
-      // Upload frames
-      this.logger.log(`[PRINT] Uploading frames to S3...`)
-      await ffmpeg.uploadDir(
-        outputDir,
-        this.outputBucket,
-        `${videoId}/frames`,
-        'frame_*.jpg',
-      )
+      try {
+        await ffmpeg.setup()
 
-      // Generate download URL
-      const downloadUrl = `http://localhost:4566/${this.outputBucket}/${videoId}/frames/`
+        // Download video
+        this.logger.log(
+          `[PRINT] Downloading from s3://${this.inputBucket}/${s3Key}/`,
+        )
+        const inputPath = await ffmpeg.download(
+          this.inputBucket,
+          `${s3Key}/video.mp4`,
+        )
 
-      // Emit COMPLETED event
-      await this.emitStatusEvent(
-        videoId,
-        'COMPLETED',
-        userEmail,
-        videoName,
-        downloadUrl,
-      )
+        // Extract frames
+        this.logger.log(
+          `[PRINT] Extracting frames (1 every ${this.frameInterval}s)...`,
+        )
+        const { outputDir, count } = await ffmpeg.extractFrames(
+          inputPath,
+          this.frameInterval,
+        )
+        this.logger.log(`[PRINT] Extracted ${count} frames`)
 
-      this.logger.log(`[PRINT] Complete: ${videoId}`)
-    } finally {
-      await ffmpeg.cleanup()
+        // Upload frames
+        this.logger.log(`[PRINT] Uploading frames to S3...`)
+        await ffmpeg.uploadDir(
+          outputDir,
+          this.outputBucket,
+          `${videoId}/frames`,
+          'frame_*.jpg',
+        )
+
+        // Generate download URL
+        const downloadUrl = `http://localhost:4566/${this.outputBucket}/${videoId}/frames/`
+
+        // Emit COMPLETED event
+        await this.emitStatusEvent(
+          videoId,
+          'COMPLETED',
+          userEmail,
+          videoName,
+          downloadUrl,
+        )
+
+        this.logger.log(`[PRINT] Complete: ${videoId}`)
+      } finally {
+        await ffmpeg.cleanup()
+      }
+    } catch (error) {
+      await this.onError(error as Error, event)
+      return
     }
   }
 
@@ -136,7 +141,7 @@ class PrintWorker extends AbstractSQSConsumer<VideoEvent> {
       return 'discard'
     }
 
-    return 'retry'
+    return 'discard'
   }
 
   private async emitStatusEvent(

@@ -94,6 +94,6 @@ export class CompleteMultipartConsumer extends AbstractSQSConsumer<S3Event> {
   ): Promise<'retry' | 'discard'> {
     this.logger.error('Error handling S3 event', { error })
     // S3 events should generally be retried unless the video truly doesn't exist
-    return 'retry'
+    return 'discard'
   }
 }

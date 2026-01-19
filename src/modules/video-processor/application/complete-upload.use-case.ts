@@ -1,5 +1,9 @@
 import { Result } from '@core/domain/result'
 import type { VideoRepository } from '@modules/video-processor/domain/repositories/video.repository'
+import {
+  EventBridgeClient,
+  PutEventsCommand,
+} from '@aws-sdk/client-eventbridge'
 
 export type CompleteUploadParams = {
   videoId: string
@@ -12,6 +16,11 @@ export type CompleteUploadResult = {
 }
 
 import type { UploadVideoPartsService } from '@modules/video-processor/domain/services/upload-video-parts.service.interface'
+
+const eventBridgeClient = new EventBridgeClient({
+  region: Bun.env.AWS_REGION || 'us-east-1',
+  endpoint: Bun.env.AWS_ENDPOINT,
+})
 
 export class CompleteUploadUseCase {
   constructor(
@@ -89,6 +98,27 @@ export class CompleteUploadUseCase {
     if (updateResult.isFailure) {
       return Result.fail(updateResult.error)
     }
+
+    // Emit UPLOADED event to EventBridge to trigger split-worker
+    // This is done here directly instead of relying on S3 -> EventBridge -> API Destination chain
+    // which can be unreliable in LocalStack
+    await eventBridgeClient.send(
+      new PutEventsCommand({
+        Entries: [
+          {
+            Source: 'fiapx.video',
+            DetailType: 'Video Status Changed',
+            Detail: JSON.stringify({
+              videoId,
+              videoPath:
+                video.thirdPartyVideoIntegration?.value.path || videoId,
+              status: 'UPLOADED',
+              timestamp: new Date().toISOString(),
+            }),
+          },
+        ],
+      }),
+    )
 
     return Result.ok({
       status: video.status.value,

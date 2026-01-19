@@ -1,7 +1,7 @@
 @startuml HLD-Sequence
 !theme aws-orange
 
-title Processamento de Vídeo - Fluxo Completo
+title Processamento de Vídeo - Fluxo Completo\n(EventBridge + API Destination + SQS + KEDA + SES)
 
 skinparam backgroundColor #FEFEFE
 skinparam sequenceArrowThickness 2
@@ -17,11 +17,12 @@ box "Auth" #LightGreen
     participant "Cognito" as cognito
 end box
 
-box "FIAPX API" #LightYellow
+box "FIAPX API (Elysia)" #LightYellow
     participant "POST /videos" as apiCreate
     participant "GET /upload-urls" as apiUrls
     participant "POST /parts/{n}" as apiParts
     participant "POST /complete" as apiComplete
+    participant "POST /webhooks/s3" as apiWebhook
 end box
 
 box "AWS Storage" #Orange
@@ -31,22 +32,23 @@ end box
 
 box "AWS Events" #Pink
     participant "EventBridge" as eb
+    participant "API Dest\n(Webhook)" as apiDestHook
+    participant "API Dest\n(SES)" as apiDestSES
     queue "SQS Split" as sqsSplit
     queue "SQS Print" as sqsPrint
 end box
 
-box "Kubernetes" #Gray
+box "Kubernetes (Spot)" #Gray
     participant "KEDA Split" as kedaSplit
     participant "KEDA Print" as kedaPrint
     participant "FFmpeg Job" as ffmpeg
 end box
 
-box "Notifications" #LightCyan
-    participant "SNS" as sns
-    participant "Lambda Email" as email
+box "Notifications (Zero Lambda)" #LightCyan
+    participant "SES\nTemplates" as ses
 end box
 
-database "Cassandra" as db #Gold
+database "ScyllaDB" as db #Gold
 
 == 0. Autenticação ==
 
@@ -65,7 +67,7 @@ apiCreate -> db: INSERT video (CREATED)
 apiCreate --> user: {videoId, uploadId, totalParts}
 deactivate apiCreate
 
-== 2. Obter URLs (Paginado) ==
+== 2. Obter URLs (Paginado - ADR 006) ==
 
 loop Batch de 20 URLs
     user -> apiUrls: GET /upload-urls?start=N&limit=20
@@ -76,7 +78,7 @@ loop Batch de 20 URLs
     deactivate apiUrls
 end
 
-== 3. Upload Paralelo ==
+== 3. Upload Paralelo (Presigned URLs) ==
 
 user -> s3: PUT presigned URL (parte 1)
 s3 --> user: ETag
@@ -84,6 +86,7 @@ user -> apiParts: POST /parts/1 {etag}
 apiParts -> db: UPDATE part 1 (uploaded)
 
 note over user, s3
+    **Upload direto no S3** (Zero proxy no backend)
     Upload paralelo de até 20 partes simultâneas.
     Cliente reporta ETag de cada parte para tracking.
 end note
@@ -94,68 +97,81 @@ user -> apiComplete: POST /complete\n{parts: [{partNumber, etag}...]}
 activate apiComplete
 apiComplete -> s3: CompleteMultipartUpload
 s3 --> apiComplete: 200 OK
-apiComplete -> db: UPDATE status = UPLOADED
 apiComplete --> user: 202 Accepted
 deactivate apiComplete
 
-== 5. Evento S3 (Automático) ==
+== 5. Evento S3 → Webhook (ADR 010) ==
 
 s3 -> eb: Object Created\n(CompleteMultipartUpload)
 activate eb
+eb -> apiDestHook: Roteia evento
+apiDestHook -> apiWebhook: POST /webhooks/s3/complete
+activate apiWebhook
 
-note over eb
+note over apiWebhook
     **RECONCILIAÇÃO**
     Se chegou aqui, upload está 100% OK.
     Sistema marca todas as partes como UPLOADED
     mesmo que cliente não tenha reportado.
 end note
 
-eb -> sqsSplit: Publica mensagem
+apiWebhook -> db: UPDATE status = UPLOADED\n(reconcilia partes)
+apiWebhook -> eb: PutEvents\n(Video Status Changed: UPLOADED)
+deactivate apiWebhook
+eb -> sqsSplit: Enfileira mensagem
 deactivate eb
 
-== 6. Split do Vídeo ==
+== 6. Split do Vídeo (KEDA + Spot) ==
 
-sqsSplit -> kedaSplit: Poll (KEDA escala)
+sqsSplit -> kedaSplit: Poll (KEDA escala pod)
 activate kedaSplit
 kedaSplit -> ffmpeg: Cria K8s Job
 activate ffmpeg
 ffmpeg -> s3: Download vídeo
 ffmpeg -> ffmpeg: FFmpeg split\n(segmentos 60s)
-ffmpeg -> sqsPrint: Publica N segmentos
 ffmpeg -> db: UPDATE status = SPLITTING
+ffmpeg -> eb: PutEvents\n(Video Status Changed: SPLITTING)
 deactivate ffmpeg
 deactivate kedaSplit
 
+== 6.1. Notificação "Quase Lá" (ADR 007) ==
+
+eb -> apiDestSES: Roteia (status = SPLITTING)
+apiDestSES -> ses: SendTemplatedEmail\n(VideoQuaseFinalizado)
+ses --> user: Email: "Seu vídeo está quase pronto! 🎬"
+
 == 7. Extração de Frames ==
 
-sqsPrint -> kedaPrint: Poll (KEDA escala)
+eb -> sqsPrint: Enfileira segmentos
+sqsPrint -> kedaPrint: Poll (KEDA escala pod)
 activate kedaPrint
 kedaPrint -> ffmpeg: Cria K8s Job
 activate ffmpeg
 ffmpeg -> s3: Download segmento
 ffmpeg -> ffmpeg: FFmpeg extract\n(1 frame/segundo)
 ffmpeg -> s3frames: Upload frames
-ffmpeg -> db: UPDATE status = PRINTING
+ffmpeg -> db: UPDATE status = COMPLETED
+ffmpeg -> eb: PutEvents\n(Video Status Changed: COMPLETED)
 deactivate ffmpeg
 deactivate kedaPrint
 
-== 8. Notificação ==
+== 8. Notificação Final (ADR 007, 008) ==
 
-s3frames -> eb: Object Created (último frame)
-eb -> sns: Publica evento
-sns -> email: Invoke Lambda
-email -> user: Email: "Vídeo processado!"
-
-db -> db: UPDATE status = COMPLETED
+eb -> apiDestSES: Roteia (status = COMPLETED)
+apiDestSES -> ses: SendTemplatedEmail\n(VideoConcluido)
+ses --> user: Email: "Seu vídeo está pronto! ✅"
 
 == Fluxo Concluído ==
 
 note over user, db
-    **Tempo total estimado:**
-    - Upload 1GB: ~2 min
-    - Split: ~30s
+    **Tempo total estimado (1GB/1h):**
+    - Upload 100 partes: ~2 min
+    - Split (60 segmentos): ~30s
     - Print frames: ~3 min
-    - Total: ~5 minutos
+    - **Total: ~5 minutos**
+
+    **Economia vs Lambda: 99%**
+    (KEDA + Spot Instances)
 end note
 
 @enduml

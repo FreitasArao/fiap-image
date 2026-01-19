@@ -1,170 +1,131 @@
-@startuml HLD-Architecture
-!define AWSPuml https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v18.0/dist
-!include AWSPuml/AWSCommon.puml
-!include AWSPuml/AWSSimplified.puml
-!include AWSPuml/General/Users.puml
-!include AWSPuml/SecurityIdentityCompliance/Cognito.puml
-!include AWSPuml/NetworkingContentDelivery/APIGateway.puml
-!include AWSPuml/Storage/SimpleStorageService.puml
-!include AWSPuml/ApplicationIntegration/EventBridge.puml
-!include AWSPuml/ApplicationIntegration/SimpleQueueService.puml
-!include AWSPuml/ApplicationIntegration/SimpleNotificationService.puml
-!include AWSPuml/Compute/Lambda.puml
-!include AWSPuml/Database/Database.puml
-!include AWSPuml/Containers/ElasticKubernetesService.puml
+@startuml HLD-Flow-Blocks-UserPhases
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
 
-' Layout
-left to right direction
-skinparam linetype ortho
-skinparam backgroundColor #FFFFFF
-skinparam defaultTextAlignment center
+LAYOUT_LEFT_RIGHT()
+HIDE_STEREOTYPE()
+title Processamento de Vídeo - Arquitetura Final\n(Usuário duplicado por fase)
 
-title Processamento de Vídeo - Arquitetura AWS\n\n
+legend right
+  |= Cor |= Tipo |
+  | <#438DD5> | AWS Services |
+  | <#1168BD> | API / Backend |
+  | <#999999> | Kubernetes |
+  | <#FF9900> | Banco de Dados |
+endlegend
 
-' ============================================
-' CAMADA 1: CLIENTE
-' ============================================
-rectangle "**Cliente**" as client_layer #E8F4FD {
-    Users(user, "Usuário", "Web/Mobile")
+' =========================
+' USUÁRIOS POR FASE
+' =========================
+Person(userAuth, "Usuário", "Login")
+Person(userUpload, "Usuário", "Upload do vídeo")
+Person(userProcess, "Usuário", "Dispara processamento")
+Person(userNotify, "Usuário", "Recebe notificação")
+
+' =========================
+' BLOCO A — AUTH
+' =========================
+System_Boundary(block_auth, "BLOCO A — Autenticação") {
+  Container(cognito_A, "Cognito", "AWS", "Auth OTP")
 }
 
-' ============================================
-' CAMADA 2: AUTENTICAÇÃO
-' ============================================
-rectangle "**Autenticação**" as auth_layer #E8F8E8 {
-    APIGateway(apigw, "API Gateway", "JWT Authorizer")
-    Cognito(cognito, "Cognito", "OTP Email")
+Rel(userAuth, cognito_A, "0. Login OTP")
+Rel(cognito_A, userAuth, "JWT")
+
+' =========================
+' BLOCO B — UPLOAD
+' =========================
+System_Boundary(block_upload, "BLOCO B — Upload") {
+  Container(apiVideos_B, "POST /videos", "Elysia", "Cria vídeo")
+  Container(apiUrls_B, "GET /upload-urls", "Elysia", "Batch 20 URLs")
+  Container(apiParts_B, "POST /parts/{n}", "Elysia", "Reporta ETag")
+  Container(apiComplete_B, "POST /complete", "Elysia", "Finaliza upload")
+
+  ContainerDb(s3Upload_B, "S3 Videos (Upload)", "S3", "Multipart Upload")
+  ContainerDb(cassandraUpload_B, "ScyllaDB", "CQL", "Status vídeo")
 }
 
-' ============================================
-' CAMADA 3: API
-' ============================================
-rectangle "**FIAPX API**" as api_layer #FFF8E8 {
-    rectangle "Endpoints" {
-        component "POST /videos" as ep1
-        component "GET /upload-urls" as ep2
-        component "POST /parts/{n}" as ep3
-        component "POST /complete" as ep4
-    }
+Rel(userUpload, apiVideos_B, "1. Cria vídeo")
+Rel(apiVideos_B, s3Upload_B, "CreateMultipartUpload")
+Rel(apiVideos_B, cassandraUpload_B, "CREATED")
+
+Rel(userUpload, apiUrls_B, "2. Solicita URLs")
+Rel(apiUrls_B, s3Upload_B, "getSignedUrl")
+Rel(apiUrls_B, cassandraUpload_B, "UPLOADING")
+
+Rel(userUpload, s3Upload_B, "3. Upload partes")
+Rel(userUpload, apiParts_B, "4. Reporta ETag")
+Rel(apiParts_B, cassandraUpload_B, "Atualiza parte")
+
+Rel(userUpload, apiComplete_B, "5. Finaliza")
+Rel(apiComplete_B, s3Upload_B, "CompleteMultipart")
+
+' =========================
+' BLOCO C — EVENTO S3
+' =========================
+System_Boundary(block_events, "BLOCO C — S3 → EventBridge") {
+  Container(eventbridge_C, "EventBridge", "AWS", "Roteamento")
+  Container(apiDestWebhook_C, "API Destination", "EB", "Webhook")
+  Container(apiWebhook_C, "POST /webhooks/s3", "Elysia", "Recebe evento")
+
+  ContainerQueue(sqsSplit_C, "SQS Split", "SQS", "Fila split")
+  ContainerQueue(sqsPrint_C, "SQS Print", "SQS", "Fila print")
+
+  ContainerDb(cassandraEvent_C, "ScyllaDB", "CQL", "UPLOADED")
 }
 
-' ============================================
-' CAMADA 4: STORAGE
-' ============================================
-rectangle "**Storage**" as storage_layer #FFE8D0 {
-    SimpleStorageService(s3videos, "S3 Videos", "Vídeos originais")
-    SimpleStorageService(s3frames, "S3 Frames", "Frames extraídos")
+Rel(s3Upload_B, eventbridge_C, "6. Object Created")
+Rel(eventbridge_C, apiDestWebhook_C, "Roteia")
+Rel(apiDestWebhook_C, apiWebhook_C, "POST webhook")
+Rel(apiWebhook_C, cassandraEvent_C, "UPLOADED")
+Rel(apiWebhook_C, eventbridge_C, "7. Status Changed")
+Rel(eventbridge_C, sqsSplit_C, "Enfileira")
+Rel(eventbridge_C, sqsPrint_C, "Enfileira")
+
+' =========================
+' BLOCO D — SPLIT
+' =========================
+System_Boundary(block_split, "BLOCO D — Split") {
+  Container(kedaSplit_D, "Split Worker", "KEDA", "Consome SQS")
+  Container(jobSplit_D, "FFmpeg Split", "Job", "Divide vídeo")
+
+  ContainerDb(s3Split_D, "S3 Videos (Read)", "S3", "Download")
+  ContainerDb(cassandraSplit_D, "ScyllaDB", "CQL", "SPLITTING")
 }
 
-' ============================================
-' CAMADA 5: EVENTOS
-' ============================================
-rectangle "**Event-Driven**" as events_layer #F0E8FF {
-    EventBridge(eb, "EventBridge", "Roteamento S3")
-    SimpleQueueService(sqsSplit, "SQS Split", "Fila divisão")
-    SimpleQueueService(sqsPrint, "SQS Print", "Fila frames")
-    SimpleQueueService(sqsDlq, "SQS DLQ", "Dead Letter")
+Rel(sqsSplit_C, kedaSplit_D, "8. Poll")
+Rel(kedaSplit_D, jobSplit_D, "Cria Job")
+Rel(jobSplit_D, s3Split_D, "Download")
+Rel(jobSplit_D, cassandraSplit_D, "SPLITTING")
+Rel(jobSplit_D, eventbridge_C, "9. Status Changed")
+
+' =========================
+' BLOCO E — PRINT
+' =========================
+System_Boundary(block_print, "BLOCO E — Print") {
+  Container(kedaPrint_E, "Print Worker", "KEDA", "Consome SQS")
+  Container(jobPrint_E, "FFmpeg Print", "Job", "Extrai frames")
+
+  ContainerDb(s3Frames_E, "S3 Frames", "S3", "Salva frames")
+  ContainerDb(cassandraDone_E, "ScyllaDB", "CQL", "COMPLETED")
 }
 
-' ============================================
-' CAMADA 6: PROCESSAMENTO
-' ============================================
-rectangle "**Kubernetes**" as k8s_layer #E8E8E8 {
-    ElasticKubernetesService(eks, "EKS", "Cluster")
-    rectangle "KEDA Workers" {
-        component "Split Worker" as splitW
-        component "Print Worker" as printW
-    }
-    rectangle "Jobs" {
-        component "FFmpeg Split" as jobS
-        component "FFmpeg Print" as jobP
-    }
+Rel(sqsPrint_C, kedaPrint_E, "10. Poll")
+Rel(kedaPrint_E, jobPrint_E, "Cria Job")
+Rel(jobPrint_E, s3Frames_E, "Salva frames")
+Rel(jobPrint_E, cassandraDone_E, "COMPLETED")
+Rel(jobPrint_E, eventbridge_C, "11. Status Changed")
+
+' =========================
+' BLOCO F — NOTIFICAÇÃO
+' =========================
+System_Boundary(block_notify, "BLOCO F — Notificação") {
+  Container(apiDestSES_F, "API Destination", "EB", "Notificação SES")
+  Container(ses_F, "SES", "AWS", "Email Templates")
 }
 
-' ============================================
-' CAMADA 7: NOTIFICAÇÕES
-' ============================================
-rectangle "**Notificações**" as notify_layer #E8FFFF {
-    SimpleNotificationService(sns, "SNS", "Fanout")
-    Lambda(lambdaEmail, "Lambda", "Email")
-    Lambda(lambdaSms, "Lambda", "SMS")
-}
-
-' ============================================
-' DATABASE
-' ============================================
-rectangle "**Database**" as db_layer #FFF0E8 {
-    Database(cassandra, "Cassandra", "RF=3, QUORUM")
-}
-
-' ============================================
-' CONEXÕES - FLUXO PRINCIPAL
-' ============================================
-
-' Auth
-user --> apigw : "0. JWT"
-apigw --> cognito
-
-' API
-user --> ep1 : "1. Criar"
-user --> ep2 : "2. URLs"
-user --> ep3 : "4. ETag"
-user --> ep4 : "5. Complete"
-
-' Storage
-ep1 --> s3videos : "CreateMultipart"
-ep2 --> s3videos : "Presigned"
-user --> s3videos : "3. Upload"
-ep4 --> s3videos : "Complete"
-
-' Events
-s3videos --> eb : "6. Event"
-eb --> sqsSplit
-sqsSplit --> sqsDlq : "Falha"
-
-' Processing
-sqsSplit --> splitW : "7. Poll"
-splitW --> jobS
-jobS --> s3videos : "Download"
-jobS --> sqsPrint : "Segmentos"
-
-sqsPrint --> printW : "8. Poll"
-printW --> jobP
-jobP --> s3frames : "Frames"
-sqsPrint --> sqsDlq : "Falha"
-
-' Notifications
-s3frames --> eb : "9. Event"
-eb --> sns
-sns --> lambdaEmail : "10. Email"
-sns --> lambdaSms : "SMS"
-
-' Database
-ep1 --> cassandra : "CREATED"
-ep2 --> cassandra : "UPLOADING"
-ep3 --> cassandra : "Parte OK"
-ep4 --> cassandra : "UPLOADED"
-jobS --> cassandra : "SPLITTING"
-jobP --> cassandra : "COMPLETED"
-
-' ============================================
-' NOTAS
-' ============================================
-note bottom of s3videos
-  **LIMITAÇÃO S3**
-  Não emite eventos
-  para UploadPart.
-
-  Apenas Complete
-  gera evento.
-end note
-
-note bottom of eb
-  **RECONCILIAÇÃO**
-  Se evento chegou,
-  upload está 100% OK.
-  Marca todas partes
-  como UPLOADED.
-end note
+Rel(eventbridge_C, apiDestSES_F, "Roteia")
+Rel(apiDestSES_F, ses_F, "12. SendTemplatedEmail")
+Rel_Back(ses_F, userNotify, "Email: Quase lá / Concluído / Falha")
 
 @enduml

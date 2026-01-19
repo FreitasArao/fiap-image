@@ -40,6 +40,35 @@ services:
         aws --endpoint-url=http://localstack:4566 s3 mb s3://fiapx-video-parts || true
         aws --endpoint-url=http://localstack:4566 s3 mb s3://fiapx-video-frames || true
 
+        echo "=== Configurando CORS nos buckets ==="
+        aws --endpoint-url=http://localstack:4566 s3api put-bucket-cors \
+          --bucket fiapx-video-parts \
+          --cors-configuration '{
+            "CORSRules": [
+              {
+                "AllowedHeaders": ["*"],
+                "AllowedMethods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
+                "AllowedOrigins": ["*"],
+                "ExposeHeaders": ["ETag", "x-amz-meta-custom-header"],
+                "MaxAgeSeconds": 3600
+              }
+            ]
+          }'
+
+        aws --endpoint-url=http://localstack:4566 s3api put-bucket-cors \
+          --bucket fiapx-video-frames \
+          --cors-configuration '{
+            "CORSRules": [
+              {
+                "AllowedHeaders": ["*"],
+                "AllowedMethods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
+                "AllowedOrigins": ["*"],
+                "ExposeHeaders": ["ETag", "x-amz-meta-custom-header"],
+                "MaxAgeSeconds": 3600
+              }
+            ]
+          }'
+
         echo "=== Habilitando EventBridge no bucket ==="
         aws --endpoint-url=http://localstack:4566 s3api put-bucket-notification-configuration \
           --bucket fiapx-video-parts \

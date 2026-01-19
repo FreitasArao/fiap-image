@@ -57,13 +57,11 @@ class SplitWorker extends AbstractSQSConsumer<VideoEvent> {
       await ffmpeg.setup()
 
       // Download video
+      // The S3 key is just the videoId (no extension), as uploaded via multipart upload
       this.logger.log(
-        `[SPLIT] Downloading from s3://${this.inputBucket}/${s3Key}/`,
+        `[SPLIT] Downloading from s3://${this.inputBucket}/${s3Key}`,
       )
-      const inputPath = await ffmpeg.download(
-        this.inputBucket,
-        `${s3Key}/video.mp4`,
-      )
+      const inputPath = await ffmpeg.download(this.inputBucket, s3Key)
 
       // Split into segments
       this.logger.log(
@@ -88,6 +86,9 @@ class SplitWorker extends AbstractSQSConsumer<VideoEvent> {
       await this.emitStatusEvent(videoId, 'SPLITTING', userEmail, videoName)
 
       this.logger.log(`[SPLIT] Complete: ${videoId}`)
+    } catch (error) {
+      await this.onError(error as Error, event)
+      return
     } finally {
       await ffmpeg.cleanup()
     }
@@ -119,11 +120,11 @@ class SplitWorker extends AbstractSQSConsumer<VideoEvent> {
       this.logger.warn('[SPLIT] Non-retryable error, discarding message', {
         videoId: message?.detail?.videoId,
       })
-      // TODO: Emit FAILED event to update video status
+
       return 'discard'
     }
 
-    return 'retry'
+    return 'discard'
   }
 
   private async emitStatusEvent(

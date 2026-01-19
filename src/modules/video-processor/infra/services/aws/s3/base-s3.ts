@@ -25,15 +25,24 @@ export type CompleteMultipartUploadParams = {
 
 export abstract class BaseS3Service {
   protected readonly s3: S3Client
+  private readonly internalEndpoint: string | undefined
+  private readonly publicEndpoint: string | undefined
+
   constructor(protected readonly logger: AbstractLoggerService) {
     if (!Bun.env.AWS_ACCESS_KEY_ID || !Bun.env.AWS_SECRET_ACCESS_KEY) {
       throw new Error(
         'AWS_ENDPOINT, AWS_REGION, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set',
       )
     }
+
+    this.internalEndpoint = Bun.env.AWS_ENDPOINT
+    // AWS_PUBLIC_ENDPOINT is used for presigned URLs that will be accessed by clients (e.g., browser)
+    // If not set, falls back to AWS_ENDPOINT
+    this.publicEndpoint = Bun.env.AWS_PUBLIC_ENDPOINT || Bun.env.AWS_ENDPOINT
+
     this.s3 = new S3Client({
       region: Bun.env?.AWS_REGION,
-      endpoint: Bun.env?.AWS_ENDPOINT,
+      endpoint: this.internalEndpoint,
       forcePathStyle: true,
       credentials: {
         accessKeyId: Bun.env.AWS_ACCESS_KEY_ID,
@@ -42,6 +51,19 @@ export abstract class BaseS3Service {
       requestChecksumCalculation: 'WHEN_REQUIRED',
       responseChecksumValidation: 'WHEN_REQUIRED',
     })
+  }
+
+  /**
+   * Converts an internal URL to a public URL by replacing the internal endpoint
+   * with the public endpoint. This is necessary when running in Docker where
+   * the S3 service is accessed via container hostname internally (e.g., localstack:4566)
+   * but needs to be accessed via localhost from the browser.
+   */
+  protected toPublicUrl(url: string): string {
+    if (this.internalEndpoint && this.publicEndpoint && this.internalEndpoint !== this.publicEndpoint) {
+      return url.replace(this.internalEndpoint, this.publicEndpoint)
+    }
+    return url
   }
 
   abstract get bucketName(): string
@@ -114,8 +136,11 @@ export abstract class BaseS3Service {
         expiresIn,
       })
 
+      // Convert internal URL to public URL for client access
+      const publicUrl = this.toPublicUrl(url)
+
       return Result.ok({
-        url: url,
+        url: publicUrl,
         expiresAt: new Date(Date.now() + expiresIn * 1000),
       })
     } catch (error) {

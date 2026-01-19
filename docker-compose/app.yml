@@ -11,6 +11,7 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_REGION=${AWS_REGION}
       - AWS_ENDPOINT=${AWS_ENDPOINT}
+      - AWS_PUBLIC_ENDPOINT=${AWS_PUBLIC_ENDPOINT:-http://localhost:4566}
     ports:
       - "3002:3010"
     volumes:
