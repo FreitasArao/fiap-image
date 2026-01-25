@@ -1,23 +1,23 @@
-import { CreateVideoURLS } from '@modules/video-processor/domain/entities/create-video-urls'
-import { MegabytesValueObject } from '@modules/video-processor/domain/value-objects/megabytes.vo'
-import { VideoMetadataVO } from '@modules/video-processor/domain/value-objects/video-metadata.vo'
-import { beforeAll, describe, expect, it } from 'bun:test'
+import { CalculateVideoParts } from "@modules/video-processor/domain/entities/calculate-video-parts";
+import { MegabytesValueObject } from "@modules/video-processor/domain/value-objects/megabytes.vo";
+import { VideoMetadataVO } from "@modules/video-processor/domain/value-objects/video-metadata.vo";
+import { beforeAll, describe, expect, it } from "bun:test";
 
-describe('CreateVideoUrls', () => {
-  let sut: CreateVideoURLS
+describe("CalculateVideoParts", () => {
+  let sut: CalculateVideoParts;
   beforeAll(() => {
-    sut = new CreateVideoURLS()
-  })
-  it('When a video metadadta size is lower than 5mb should return 1 part', () => {
+    sut = new CalculateVideoParts();
+  });
+  it("When a video metadadta size is lower than 5mb should return 1 part", () => {
     const videoMetadata = VideoMetadataVO.create({
       totalSize: MegabytesValueObject.create(4).value,
       duration: 100000000,
-    })
-    const parts = sut.create(videoMetadata)
+    });
+    const parts = sut.create(videoMetadata);
 
-    expect(parts.isSuccess).toBe(true)
-    expect(parts.value).toBe(1)
-  })
+    expect(parts.isSuccess).toBe(true);
+    expect(parts.value).toBe(1);
+  });
   it.each([
     // Pequenos
     { size: MegabytesValueObject.create(5.1), expected: 1 },
@@ -47,18 +47,18 @@ describe('CreateVideoUrls', () => {
     { size: MegabytesValueObject.create(310000), expected: 9688 },
     { size: MegabytesValueObject.create(319999), expected: 10000 },
     { size: MegabytesValueObject.create(320000), expected: 10000 },
-  ])('When video size is $size.value MB should return $expected parts', ({
-    size,
-    expected,
-  }) => {
-    const videoMetadata = VideoMetadataVO.create({
-      totalSize: size.value,
-      duration: 100000000,
-    })
+  ])(
+    "When video size is $size.value MB should return $expected parts",
+    ({ size, expected }) => {
+      const videoMetadata = VideoMetadataVO.create({
+        totalSize: size.value,
+        duration: 100000000,
+      });
 
-    const parts = sut.create(videoMetadata)
+      const parts = sut.create(videoMetadata);
 
-    expect(parts.isSuccess).toBe(true)
-    expect(parts.value).toBe(expected)
-  })
-})
+      expect(parts.isSuccess).toBe(true);
+      expect(parts.value).toBe(expected);
+    },
+  );
+});

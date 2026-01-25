@@ -3,7 +3,7 @@ export {}
 declare global {
   namespace Bun {
     interface Env {
-      NODE_ENV?: 'development' | 'production'
+      NODE_ENV?: 'development' | 'production' | 'test'
       LOG_LEVEL?: 'info' | 'error' | 'warn' | 'debug' | 'trace'
       // AWS Configuration
       AWS_ACCESS_KEY_ID?: string

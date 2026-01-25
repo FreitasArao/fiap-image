@@ -22,14 +22,10 @@ export class GetUploadProgressUseCase {
     const { videoId } = params
 
     const videoResult = await this.videoRepository.findById(videoId)
-    if (videoResult.isFailure) {
-      return Result.fail(videoResult.error)
-    }
+    if (videoResult.isFailure) return Result.fail(videoResult.error)
 
     const video = videoResult.value
-    if (!video) {
-      return Result.fail(new Error(`Video not found: ${videoId}`))
-    }
+    if (!video) return Result.fail(new Error(`Video not found: ${videoId}`))
 
     return Result.ok({
       status: video.status.value,

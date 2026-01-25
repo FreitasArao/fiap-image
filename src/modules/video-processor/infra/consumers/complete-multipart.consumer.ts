@@ -1,99 +1,42 @@
-import { Message, SQSClient } from '@aws-sdk/client-sqs'
 import { AbstractSQSConsumer } from '@modules/messaging/sqs/abstract-sqs-consumer'
-import { VideoRepository } from '@modules/video-processor/domain/repositories/video.repository'
 import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import {
+  CompleteMultipartEvent,
+  CompleteMultipartHandler,
+} from '@modules/video-processor/infra/consumers/complete-multipart-handler'
 
-type S3Event = {
-  detail: {
-    bucket: {
-      name: string
-    }
-    object: {
-      key: string
-    }
-    reason: string // "CompleteMultipartUpload"
-  }
-}
-
-export class CompleteMultipartConsumer extends AbstractSQSConsumer<S3Event> {
+export class CompleteMultipartConsumer extends AbstractSQSConsumer<CompleteMultipartEvent> {
   constructor(
     logger: AbstractLoggerService,
-    sqsClient: SQSClient,
-    queueUrl: string,
-    private readonly videoRepository: VideoRepository,
+    private readonly completeMultipartHandler: CompleteMultipartHandler,
   ) {
-    super(logger, sqsClient, queueUrl)
+    super(
+      {
+        queueUrl: process.env.COMPLETE_MULTIPART_QUEUE_URL || '',
+        region: 'us-east-1',
+      },
+      logger,
+    )
   }
 
-  protected parseMessage(message: Message): S3Event {
-    const body = JSON.parse(message.Body || '{}')
-    return body
+  protected parseMessage(body: string): CompleteMultipartEvent | null {
+    const data = JSON.parse(body)
+    const event = data as CompleteMultipartEvent
+
+    if (!event.detail) {
+      return null
+    }
+
+    return event
   }
 
-  protected async handleMessage(event: S3Event): Promise<void> {
-    const { key } = event.detail.object
-    const { name: bucket } = event.detail.bucket
-
-    this.logger.log('Received S3 CompleteMultipartUpload event', {
-      key,
-      bucket,
+  protected async handleMessage(event: CompleteMultipartEvent): Promise<void> {
+    this.logger.log('Handling S3 CompleteMultipartUpload event', {
+      event,
     })
-
-    const videoId = key.split('/')[0]
-
-    const result = await this.videoRepository.findById(videoId)
-    if (result.isFailure || !result.value) {
-      this.logger.warn(`Video not found for reconciliation: ${videoId}`, {
-        key,
-      })
-      return
-    }
-
-    const video = result.value
-
-    if (
-      video.status.value === 'UPLOADED' ||
-      video.status.value === 'PROCESSING'
-    ) {
-      this.logger.log(
-        'Video already uploaded/processing, skipping reconciliation',
-      )
-      return
-    }
-
-    video.reconcileAllPartsAsUploaded()
-    const transitionResult = video.completeUpload()
-
-    if (transitionResult.isFailure) {
-      this.logger.error(
-        'Failed to transition video status during reconciliation',
-        {
-          videoId,
-          currentStatus: video.status.value,
-          error: transitionResult.error,
-        },
-      )
-      return
-    }
-
-    await Promise.all([
-      ...video.parts.map((part) =>
-        this.videoRepository.updateVideoPart(video, part.partNumber),
-      ),
-      this.videoRepository.updateVideo(video),
-    ])
-
-    this.logger.log('Video reconciled successfully via EventBridge', {
-      videoId,
+    await this.completeMultipartHandler.handle(event)
+    this.logger.log('S3 CompleteMultipartUpload event handled successfully', {
+      event,
     })
-  }
-
-  protected async onError(
-    error: Error,
-    _message: S3Event | null,
-  ): Promise<'retry' | 'discard'> {
-    this.logger.error('Error handling S3 event', { error })
-    // S3 events should generally be retried unless the video truly doesn't exist
-    return 'discard'
   }
 }

@@ -16,8 +16,6 @@ export class InMemoryVideoRepository implements VideoRepository {
   }
 
   async createVideoParts(video: Video): Promise<Result<void, Error>> {
-    // In memory, we assume parts are already in the video entity
-    // But if we want to simulate persistence, we might update the stored item
     const index = this.items.findIndex((v) => v.id.value === video.id.value)
     if (index !== -1) {
       this.items[index] = video

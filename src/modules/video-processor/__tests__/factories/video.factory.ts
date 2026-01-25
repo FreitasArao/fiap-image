@@ -4,9 +4,10 @@ import { UniqueEntityID } from '@core/domain/value-objects/unique-entity-id.vo'
 import { ThirdPartyIntegration } from '@modules/video-processor/domain/entities/third-party-integration.vo'
 import { VideoStatusVO } from '@modules/video-processor/domain/value-objects/video-status.vo'
 import { VideoThirdPartyIntegrationsMetadataVO } from '@modules/video-processor/domain/value-objects/video-third-party-integrations-metadata.vo'
+import { VideoPart } from '@modules/video-processor/domain/entities/video-part'
 
 export class VideoFactory {
-  static create(override: Partial<Record<string, unknown>> = {}): Video {
+  static create(override: Partial<Video> = {}): Video {
     const video = Video.create({
       userId: UniqueEntityID.create(),
       metadata: VideoMetadataVO.create({
@@ -30,16 +31,18 @@ export class VideoFactory {
         id: video.id,
         userId: video.userId,
         metadata: video.metadata,
-        status: VideoStatusVO.create(override.status as any),
-        parts: (override.parts as any) || [],
+        status: VideoStatusVO.create(override.status.value),
+        parts: (override.parts as VideoPart[]) || [],
         integration:
-          (override.integration as any) || ThirdPartyIntegration.create(),
+          (override.integration as ThirdPartyIntegration) ||
+          ThirdPartyIntegration.create(),
         thirdPartyVideoIntegration:
-          (override.thirdPartyVideoIntegration as any) ||
+          (override.thirdPartyVideoIntegration as VideoThirdPartyIntegrationsMetadataVO) ||
           VideoThirdPartyIntegrationsMetadataVO.create({
             id: 'upload-123',
             bucket: 'test-bucket',
             path: 'test-path',
+            videoId: video.id.value,
           }),
         failureReason: override.failureReason as string | undefined,
       })

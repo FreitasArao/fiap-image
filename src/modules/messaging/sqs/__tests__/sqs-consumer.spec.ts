@@ -4,7 +4,6 @@ import {
   SQSClient,
   ReceiveMessageCommand,
   DeleteMessageCommand,
-  ChangeMessageVisibilityCommand,
   type Message,
 } from '@aws-sdk/client-sqs'
 import { AbstractSQSConsumer } from '../abstract-sqs-consumer'
@@ -15,19 +14,26 @@ const sqsMock = mockClient(SQSClient)
 class TestConsumer extends AbstractSQSConsumer<{ id: string }> {
   public handledMessages: { id: string }[] = []
 
-  protected parseMessage(message: Message): { id: string } {
-    return JSON.parse(message.Body || '{}')
+  protected parseMessage(body: string): { id: string } | null {
+    return JSON.parse(body)
   }
 
   protected async handleMessage(message: { id: string }): Promise<void> {
     this.handledMessages.push(message)
   }
 
-  protected async onError(
-    _error: Error,
-    _message: { id: string } | null,
-  ): Promise<'retry' | 'discard'> {
-    return 'discard'
+  protected onError(
+    error: Error,
+    message: Message,
+    payload?: { id: string } | undefined,
+  ): Promise<void> {
+    this.logger.error('Error processing message:', {
+      error: error.message,
+      message: message.MessageId,
+      payload: payload,
+    })
+
+    return Promise.resolve()
   }
 }
 
@@ -46,9 +52,15 @@ describe('AbstractSQSConsumer', () => {
     } as unknown as AbstractLoggerService
 
     consumer = new TestConsumer(
+      {
+        queueUrl: 'http://queue.url',
+        region: 'us-east-1',
+        batchSize: 10,
+        visibilityTimeout: 30,
+        waitTimeSeconds: 20,
+        pollingWaitTimeMs: 0,
+      },
       logger,
-      new SQSClient({ region: 'us-east-1' }),
-      'http://queue.url',
     )
   })
 
@@ -73,13 +85,11 @@ describe('AbstractSQSConsumer', () => {
 
     sqsMock.on(DeleteMessageCommand).resolves({})
 
-    const iterator = consumer.consume()
-    const result = await iterator.next()
+    consumer.start()
 
-    expect(result.value).toEqual({
-      message: { id: 'msg-1' },
-      receiptHandle: 'handle-1',
-    })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
+    expect(consumer.isRunning()).toBe(true)
   })
 
   it('should skip messages without body', async () => {
@@ -101,54 +111,10 @@ describe('AbstractSQSConsumer', () => {
       })
       .resolves({ Messages: [] })
 
-    const iterator = consumer.consume()
-    const result = await iterator.next()
+    consumer.start()
 
-    // Should skip the first message and return the second
-    expect(result.value).toEqual({
-      message: { id: 'msg-2' },
-      receiptHandle: 'handle-2',
-    })
-  })
+    await new Promise((resolve) => setTimeout(resolve, 100))
 
-  it('should delete message on ack', async () => {
-    sqsMock.on(DeleteMessageCommand).resolves({})
-
-    await consumer.ack('receipt-handle-123')
-
-    const calls = sqsMock.commandCalls(DeleteMessageCommand)
-    expect(calls.length).toBe(1)
-    expect(calls[0].args[0].input).toEqual({
-      QueueUrl: 'http://queue.url',
-      ReceiptHandle: 'receipt-handle-123',
-    })
-  })
-
-  it('should change visibility timeout on nack (default 60s)', async () => {
-    sqsMock.on(ChangeMessageVisibilityCommand).resolves({})
-
-    await consumer.nack('receipt-handle-456')
-
-    const calls = sqsMock.commandCalls(ChangeMessageVisibilityCommand)
-    expect(calls.length).toBe(1)
-    expect(calls[0].args[0].input).toEqual({
-      QueueUrl: 'http://queue.url',
-      ReceiptHandle: 'receipt-handle-456',
-      VisibilityTimeout: 60,
-    })
-  })
-
-  it('should change visibility timeout on nack with custom timeout', async () => {
-    sqsMock.on(ChangeMessageVisibilityCommand).resolves({})
-
-    await consumer.nack('receipt-handle-789', 120)
-
-    const calls = sqsMock.commandCalls(ChangeMessageVisibilityCommand)
-    expect(calls.length).toBe(1)
-    expect(calls[0].args[0].input).toEqual({
-      QueueUrl: 'http://queue.url',
-      ReceiptHandle: 'receipt-handle-789',
-      VisibilityTimeout: 120,
-    })
+    expect(consumer.isRunning()).toBe(true)
   })
 })

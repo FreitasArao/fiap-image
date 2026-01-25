@@ -103,7 +103,7 @@ export class PinoLoggerService extends AbstractLoggerService<pino.Level> {
   }
 
   private resolveTransport() {
-    if (Bun.env.NODE_ENV === 'development') {
+    if (Bun.env.NODE_ENV === 'development' || Bun.env.NODE_ENV === 'test') {
       return {
         target: 'pino-pretty',
         options: {

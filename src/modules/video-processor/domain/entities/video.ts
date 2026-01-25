@@ -182,6 +182,10 @@ export class Video extends AggregateRoot<Video> {
     return this._parts.length > 0 && this._parts.every((p) => p.isUploaded())
   }
 
+  isAlreadyUploaded(): boolean {
+    return this._status.isUploaded() || this._status.isProcessing()
+  }
+
   canGenerateMoreUrls(): boolean {
     return (
       this._status.value === 'CREATED' || this._status.value === 'UPLOADING'
@@ -217,6 +221,7 @@ export class Video extends AggregateRoot<Video> {
         bucket: thirdPartyVideoIntegration.bucket,
         path: thirdPartyVideoIntegration.path,
         id: thirdPartyVideoIntegration.id,
+        videoId: this.id.value,
       })
 
     return this as this & {

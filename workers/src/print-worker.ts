@@ -56,7 +56,6 @@ class PrintWorker extends AbstractSQSConsumer<VideoEvent> {
       try {
         await ffmpeg.setup()
 
-        // Download video
         this.logger.log(
           `[PRINT] Downloading from s3://${this.inputBucket}/${s3Key}/`,
         )
@@ -65,7 +64,6 @@ class PrintWorker extends AbstractSQSConsumer<VideoEvent> {
           `${s3Key}/video.mp4`,
         )
 
-        // Extract frames
         this.logger.log(
           `[PRINT] Extracting frames (1 every ${this.frameInterval}s)...`,
         )
@@ -75,7 +73,6 @@ class PrintWorker extends AbstractSQSConsumer<VideoEvent> {
         )
         this.logger.log(`[PRINT] Extracted ${count} frames`)
 
-        // Upload frames
         this.logger.log(`[PRINT] Uploading frames to S3...`)
         await ffmpeg.uploadDir(
           outputDir,
@@ -84,10 +81,8 @@ class PrintWorker extends AbstractSQSConsumer<VideoEvent> {
           'frame_*.jpg',
         )
 
-        // Generate download URL
         const downloadUrl = `http://localhost:4566/${this.outputBucket}/${videoId}/frames/`
 
-        // Emit COMPLETED event
         await this.emitStatusEvent(
           videoId,
           'COMPLETED',

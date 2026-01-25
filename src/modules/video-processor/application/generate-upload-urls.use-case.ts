@@ -1,5 +1,6 @@
 import { Result } from '@core/domain/result'
 import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import { Video } from '@modules/video-processor/domain/entities/video'
 
 import { VideoPart } from '@modules/video-processor/domain/entities/video-part'
 
@@ -72,7 +73,9 @@ export class GenerateUploadUrlsUseCase {
       .filter((part) => !part.url || part.url === '')
       .sort((a, b) => a.partNumber - b.partNumber)
 
-    if (pendingParts.length === 0) {
+    const hasNoPendingParts = pendingParts.length === 0
+
+    if (hasNoPendingParts) {
       this.logger.log('No pending parts to generate URLs for', { videoId })
       return Result.ok({
         videoId,
@@ -86,7 +89,7 @@ export class GenerateUploadUrlsUseCase {
 
     const uploadId = video.thirdPartyVideoIntegration.value.id
     const bucketKey = video.thirdPartyVideoIntegration.value.path
-    const generatedUrls: string[] = []
+    // const generatedUrls: string[] = []
 
     this.logger.log('Generating URLs for parts', {
       batch: batch.map((part) => part.partNumber),
@@ -132,8 +135,53 @@ export class GenerateUploadUrlsUseCase {
     this.logger.log('Updating parts in DB', {
       parts: results.map((r) => r.part.partNumber),
     })
-    for (const res of results) {
-      if (res.url) {
+
+    const updateResult = await this.updatePartsOnDatabase(results, video)
+    if (updateResult.isFailure) return Result.fail(updateResult.error)
+
+    const generatedUrls = updateResult.value
+
+    this.logger.log('Transitioning status if first time', {
+      status: video.status.value,
+    })
+
+    if (video.status.value === 'CREATED') {
+      const transitionResult = video.startUploading()
+      if (transitionResult.isSuccess) {
+        this.logger.log('Status transitioned successfully', {
+          status: video.status.value,
+        })
+        await this.videoRepository.updateVideo(video)
+      }
+    }
+
+    const isLessThanPendingParts = batch.length < pendingParts.length
+
+    const nextPartNumber = isLessThanPendingParts
+      ? pendingParts[batch.length].partNumber
+      : null
+
+    this.logger.log('Next part number', { nextPartNumber })
+
+    return Result.ok({
+      videoId,
+      uploadId,
+      urls: generatedUrls,
+      nextPartNumber,
+    })
+  }
+
+  private async updatePartsOnDatabase(
+    results: (
+      | { part: VideoPart; url: string }
+      | { part: VideoPart; url: null }
+    )[],
+    video: Video,
+  ): Promise<Result<string[], Error>> {
+    const updatedParts = await Promise.all(
+      results.map(async (res) => {
+        if (res.url === null) return null
+
         const updatedPart = VideoPart.assignUrl(res.part, res.url)
 
         this.logger.log('Part updated', { partNumber: res.part.partNumber })
@@ -149,39 +197,21 @@ export class GenerateUploadUrlsUseCase {
           this.logger.log('Updating part in DB', {
             partNumber: res.part.partNumber,
           })
-          await this.videoRepository.updateVideoPart(
+          const updateResult = await this.videoRepository.updateVideoPart(
             video,
             updatedPart.partNumber,
           )
-          generatedUrls.push(res.url)
+          return updateResult.isSuccess
+            ? Result.ok(res.url)
+            : Result.fail(updateResult.error)
         }
-      }
+        return Result.fail(new Error('Part not found in video'))
+      }),
+    )
+
+    if (updatedParts.some((r) => r == null)) {
+      return Result.fail(new Error('Failed to update parts in DB'))
     }
-
-    this.logger.log('Transitioning status if first time', {
-      status: video.status.value,
-    })
-    if (video.status.value === 'CREATED') {
-      const transitionResult = video.startUploading()
-      if (transitionResult.isSuccess) {
-        this.logger.log('Status transitioned successfully', {
-          status: video.status.value,
-        })
-        await this.videoRepository.updateVideo(video)
-      }
-    }
-
-    const nextPartNumber =
-      batch.length < pendingParts.length
-        ? pendingParts[batch.length].partNumber
-        : null
-    this.logger.log('Next part number', { nextPartNumber })
-
-    return Result.ok({
-      videoId,
-      uploadId,
-      urls: generatedUrls,
-      nextPartNumber,
-    })
+    return Result.ok(updatedParts.map((r) => r?.value as string))
   }
 }

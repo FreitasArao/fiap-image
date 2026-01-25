@@ -1,132 +1,129 @@
-import {
-  SQSClient,
-  ReceiveMessageCommand,
-  DeleteMessageCommand,
-  ChangeMessageVisibilityCommand,
-  type Message,
-} from '@aws-sdk/client-sqs'
-import { AbstractQueueConsumer } from '@core/abstractions/messaging/queue-consumer.abstract'
+import { Consumer } from 'sqs-consumer'
+import { SQSClient, type Message } from '@aws-sdk/client-sqs'
 import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 
-export abstract class AbstractSQSConsumer<
-  TMessage,
-> extends AbstractQueueConsumer<TMessage> {
+interface BaseConsumerConfig {
+  queueUrl: string
+  region?: string
+  batchSize?: number
+  visibilityTimeout?: number
+  waitTimeSeconds?: number
+  pollingWaitTimeMs?: number
+}
+
+export abstract class AbstractSQSConsumer<T> {
+  private consumer: Consumer
+  protected client: SQSClient
+  protected config: Required<BaseConsumerConfig>
+
   constructor(
+    config: BaseConsumerConfig,
     protected readonly logger: AbstractLoggerService,
-    protected readonly sqsClient: SQSClient,
-    protected readonly queueUrl: string,
   ) {
-    super()
+    this.config = {
+      region: config.region || process.env.AWS_REGION || 'us-east-1',
+      batchSize: config.batchSize || 10,
+      visibilityTimeout: config.visibilityTimeout || 30,
+      waitTimeSeconds: config.waitTimeSeconds || 20,
+      pollingWaitTimeMs: config.pollingWaitTimeMs || 0,
+      queueUrl: config.queueUrl,
+    }
+
+    this.client = new SQSClient({ region: this.config.region })
+
+    this.consumer = Consumer.create({
+      queueUrl: this.config.queueUrl,
+      sqs: this.client,
+      batchSize: this.config.batchSize,
+      visibilityTimeout: this.config.visibilityTimeout,
+      waitTimeSeconds: this.config.waitTimeSeconds,
+      pollingWaitTimeMs: this.config.pollingWaitTimeMs,
+      handleMessage: async (message) => {
+        return await this.processMessage(message)
+      },
+    })
+
+    this.setupEventListeners()
   }
 
-  protected abstract parseMessage(message: Message): TMessage
-  protected abstract handleMessage(message: TMessage): Promise<void>
+  protected abstract parseMessage(body: string): T | null
+  protected abstract handleMessage(payload: T, message: Message): Promise<void>
 
-  /**
-   * Handle errors during message processing.
-   * @returns 'retry' to requeue with backoff, 'discard' to delete message permanently
-   */
-  protected abstract onError(
+  protected async onError(
     error: Error,
-    message: TMessage | null,
-    rawMessage?: Message,
-  ): Promise<'retry' | 'discard'>
-
-  async start(): Promise<void> {
-    this.logger.log(`Starting SQS consumer for queue: ${this.maskQueueUrl()}`)
-
-    for await (const { message, receiptHandle } of this.consume()) {
-      try {
-        await this.handleMessage(message)
-        await this.ack(receiptHandle)
-      } catch (error) {
-        const action = await this.onError(
-          error instanceof Error ? error : new Error(String(error)),
-          message,
-        )
-
-        if (action === 'discard') {
-          this.logger.warn('Discarding message due to non-retryable error')
-          await this.ack(receiptHandle)
-        } else {
-          await this.nack(receiptHandle, 60) // Retry after 60 seconds
-        }
-      }
-    }
-  }
-
-  async *consume(): AsyncGenerator<{
-    message: TMessage
-    receiptHandle: string
-  }> {
-    while (true) {
-      try {
-        const command = new ReceiveMessageCommand({
-          QueueUrl: this.queueUrl,
-          MaxNumberOfMessages: 10,
-          WaitTimeSeconds: 20,
-          VisibilityTimeout: 30,
-        })
-
-        const response = await this.sqsClient.send(command)
-
-        if (!response.Messages || response.Messages.length === 0) {
-          continue
-        }
-
-        for (const message of response.Messages) {
-          if (!message.Body || !message.ReceiptHandle) {
-            continue
-          }
-
-          let parsedMessage: TMessage
-          try {
-            parsedMessage = this.parseMessage(message)
-          } catch (rawError) {
-            const error =
-              rawError instanceof Error ? rawError : new Error(String(rawError))
-
-            this.logger.error('Failed to parse SQS message', {
-              error,
-              messageId: message.MessageId,
-            })
-            await this.onError(error, null, message)
-            // Parse errors are not retryable - discard the message
-            await this.ack(message.ReceiptHandle)
-            continue
-          }
-
-          yield { message: parsedMessage, receiptHandle: message.ReceiptHandle }
-        }
-      } catch (error) {
-        this.logger.error('Error in SQS consume loop', { error })
-        await new Promise((resolve) => setTimeout(resolve, 5000)) // Backoff on network error
-      }
-    }
-  }
-
-  async ack(receiptHandle: string): Promise<void> {
-    const command = new DeleteMessageCommand({
-      QueueUrl: this.queueUrl,
-      ReceiptHandle: receiptHandle,
-    })
-    await this.sqsClient.send(command)
-  }
-
-  /**
-   * Negative acknowledgment - message will be reprocessed after visibility timeout.
-   * @param receiptHandle - Receipt handle from the message
-   * @param visibilityTimeoutSeconds - Time before message becomes visible again (default: 60s)
-   */
-  async nack(
-    receiptHandle: string,
-    visibilityTimeoutSeconds: number = 60,
+    message: Message,
+    payload?: T,
   ): Promise<void> {
-    const command = new ChangeMessageVisibilityCommand({
-      QueueUrl: this.queueUrl,
-      ReceiptHandle: receiptHandle,
-      VisibilityTimeout: visibilityTimeoutSeconds,
+    this.logger.error('Error processing message:', {
+      error: error.message,
+      messageId: message.MessageId,
+      payload,
     })
-    await this.sqsClient.send(command)
+  }
+
+  protected async onStart(): Promise<void> {
+    this.logger.log(`Starting consumer for ${this.config.queueUrl}`)
+  }
+
+  protected async onStop(): Promise<void> {
+    this.logger.log(`Consumer stopped for ${this.config.queueUrl}`)
+  }
+
+  private async processMessage(message: Message): Promise<Message> {
+    let payload: T | null = null
+
+    try {
+      payload = this.parseMessage(message.Body || '{}')
+
+      if (payload === null) {
+        throw new Error('Invalid message format')
+      }
+
+      await this.handleMessage(payload, message)
+
+      return message
+    } catch (error) {
+      await this.onError(
+        error instanceof Error ? error : new Error(String(error)),
+        message,
+        payload || undefined,
+      )
+
+      throw error
+    }
+  }
+
+  private setupEventListeners(): void {
+    this.consumer.on('error', (err) => {
+      this.logger.error('Consumer error:', err)
+    })
+
+    this.consumer.on('processing_error', (err) => {
+      this.logger.error('Processing error:', err)
+    })
+
+    this.consumer.on('timeout_error', (err) => {
+      this.logger.error('Timeout error:', err)
+    })
+
+    this.consumer.on('started', async () => {
+      await this.onStart()
+    })
+
+    this.consumer.on('stopped', async () => {
+      await this.onStop()
+    })
+  }
+
+  start(): void {
+    this.consumer.start()
+  }
+
+  stop(): void {
+    this.consumer.stop()
+  }
+
+  isRunning(): boolean {
+    return this.consumer.status.isRunning
   }
 }

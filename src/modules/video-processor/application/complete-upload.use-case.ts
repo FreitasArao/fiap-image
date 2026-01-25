@@ -33,18 +33,12 @@ export class CompleteUploadUseCase {
   ): Promise<Result<CompleteUploadResult, Error>> {
     const { videoId } = params
 
-    // Find the video
     const videoResult = await this.videoRepository.findById(videoId)
-    if (videoResult.isFailure) {
-      return Result.fail(videoResult.error)
-    }
+    if (videoResult.isFailure) return Result.fail(videoResult.error)
 
     const video = videoResult.value
-    if (!video) {
-      return Result.fail(new Error(`Video not found: ${videoId}`))
-    }
+    if (!video) return Result.fail(new Error(`Video not found: ${videoId}`))
 
-    // Verify video is in uploading state
     if (!video.status.isUploading()) {
       return Result.fail(
         new Error(
@@ -53,7 +47,6 @@ export class CompleteUploadUseCase {
       )
     }
 
-    // Check if all parts are uploaded
     if (!video.isFullyUploaded()) {
       const progress = video.getUploadProgress()
       return Result.fail(
@@ -63,45 +56,30 @@ export class CompleteUploadUseCase {
       )
     }
 
-    // Get parts with ETags for CompleteMultipartUpload
     const parts = video.getUploadedPartsEtags()
-    if (parts.length === 0) {
+    if (parts.length === 0)
       return Result.fail(new Error('No parts with ETags found'))
-    }
 
-    // Get upload metadata
     const uploadId = video.thirdPartyVideoIntegration?.value.id
     const key = video.thirdPartyVideoIntegration?.value.path
-    if (!uploadId || !key) {
+    const isMissingUploadIdOrKey = !uploadId || !key
+    if (isMissingUploadIdOrKey)
       return Result.fail(new Error('Missing upload ID or key'))
-    }
 
-    // Call S3 CompleteMultipartUpload
     const completeResult = await this.uploadService.completeMultipartUpload({
       key,
       uploadId,
       parts,
     })
 
-    if (completeResult.isFailure) {
-      return Result.fail(completeResult.error)
-    }
+    if (completeResult.isFailure) return Result.fail(completeResult.error)
 
-    // Transition to UPLOADED
     const transitionResult = video.completeUpload()
-    if (transitionResult.isFailure) {
-      return Result.fail(transitionResult.error)
-    }
+    if (transitionResult.isFailure) return Result.fail(transitionResult.error)
 
-    // Update video in database
     const updateResult = await this.videoRepository.updateVideo(video)
-    if (updateResult.isFailure) {
-      return Result.fail(updateResult.error)
-    }
+    if (updateResult.isFailure) return Result.fail(updateResult.error)
 
-    // Emit UPLOADED event to EventBridge to trigger split-worker
-    // This is done here directly instead of relying on S3 -> EventBridge -> API Destination chain
-    // which can be unreliable in LocalStack
     await eventBridgeClient.send(
       new PutEventsCommand({
         Entries: [

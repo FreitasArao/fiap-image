@@ -56,14 +56,11 @@ class SplitWorker extends AbstractSQSConsumer<VideoEvent> {
     try {
       await ffmpeg.setup()
 
-      // Download video
-      // The S3 key is just the videoId (no extension), as uploaded via multipart upload
       this.logger.log(
         `[SPLIT] Downloading from s3://${this.inputBucket}/${s3Key}`,
       )
       const inputPath = await ffmpeg.download(this.inputBucket, s3Key)
 
-      // Split into segments
       this.logger.log(
         `[SPLIT] Splitting into ${this.segmentDuration}s segments...`,
       )
@@ -73,7 +70,6 @@ class SplitWorker extends AbstractSQSConsumer<VideoEvent> {
       )
       this.logger.log(`[SPLIT] Created ${count} segments`)
 
-      // Upload segments
       this.logger.log(`[SPLIT] Uploading segments to S3...`)
       await ffmpeg.uploadDir(
         outputDir,
@@ -82,7 +78,6 @@ class SplitWorker extends AbstractSQSConsumer<VideoEvent> {
         'segment_*.mp4',
       )
 
-      // Emit SPLITTING event
       await this.emitStatusEvent(videoId, 'SPLITTING', userEmail, videoName)
 
       this.logger.log(`[SPLIT] Complete: ${videoId}`)
@@ -154,7 +149,6 @@ class SplitWorker extends AbstractSQSConsumer<VideoEvent> {
   }
 }
 
-// Start worker
 const queueUrl =
   process.env.SQS_QUEUE_URL || 'http://localhost:4566/000000000000/split-queue'
 const worker = new SplitWorker(logger, sqsClient, queueUrl)

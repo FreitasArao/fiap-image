@@ -29,13 +29,10 @@ export class ReportPartUploadUseCase {
     video: Video,
   ): Promise<Result<void, Error>> {
     const transitionResult = video.startUploading()
-    if (transitionResult.isFailure) {
-      return Result.fail(transitionResult.error)
-    }
+    if (transitionResult.isFailure) return Result.fail(transitionResult.error)
+
     const response = await this.videoRepository.updateVideo(video)
-    if (response.isFailure) {
-      return Result.fail(response.error)
-    }
+    if (response.isFailure) return Result.fail(response.error)
     return Result.ok(undefined)
   }
 
@@ -45,24 +42,22 @@ export class ReportPartUploadUseCase {
     const { videoId, partNumber, etag } = params
 
     const videoResult = await this.videoRepository.findById(videoId)
-    if (videoResult.isFailure) {
-      return Result.fail(videoResult.error)
-    }
+    if (videoResult.isFailure) return Result.fail(videoResult.error)
 
     const video = videoResult.value
-    if (!video) {
-      return Result.fail(new Error(`Video not found: ${videoId}`))
-    }
+    if (!video) return Result.fail(new Error(`Video not found: ${videoId}`))
 
-    if (!video.status.isUploading() && video.status.value !== 'CREATED') {
+    const isNotUploading =
+      !video.status.isUploading() && video.status.value !== 'CREATED'
+    if (isNotUploading)
       return Result.fail(
         new Error(
           `Cannot report part upload for video in status: ${video.status.value}`,
         ),
       )
-    }
 
-    if (video.status.value === 'CREATED') {
+    const isCreated = video.status.value === 'CREATED'
+    if (isCreated) {
       const transitionResult = await this.handleTransitionToUploading(video)
       if (transitionResult.isFailure) return Result.fail(transitionResult.error)
     }
