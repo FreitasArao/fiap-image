@@ -1,18 +1,18 @@
 services:
-  split-worker:
+  orchestrator-worker:
     build:
       context: ..
       dockerfile: Dockerfile.workers
-    container_name: split-worker
-    command: ["bun", "run", "workers/src/split-worker.ts"]
+    container_name: orchestrator-worker
+    command: ["bun", "run", "workers/src/orchestrator-worker.ts"]
     environment:
       - AWS_ENDPOINT_URL=http://localstack:4566
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
       - AWS_REGION=us-east-1
-      - SQS_QUEUE_URL=http://localstack:4566/000000000000/split-queue
+      - SQS_QUEUE_URL=http://localstack:4566/000000000000/orchestrator-queue
+      - PRINT_QUEUE_URL=http://localstack:4566/000000000000/print-queue
       - S3_INPUT_BUCKET=fiapx-video-parts
-      - S3_OUTPUT_BUCKET=fiapx-video-frames
       - SEGMENT_DURATION=10
     depends_on:
       localstack-init:

@@ -75,9 +75,9 @@ services:
           --notification-configuration '{ "EventBridgeConfiguration": {} }'
 
 
-        # Fila para processamento de split (FFmpeg)
+        # Fila para orquestração (calcula segmentos e despacha para print-queue)
         aws --endpoint-url=http://localstack:4566 sqs create-queue \
-          --queue-name split-queue \
+          --queue-name orchestrator-queue \
           --attributes '{
             "VisibilityTimeout": "300",
             "MessageRetentionPeriod": "86400"
@@ -97,9 +97,9 @@ services:
 
         echo "=== Configurando permissao das filas para EventBridge ==="
         aws --endpoint-url=http://localstack:4566 sqs set-queue-attributes \
-          --queue-url http://localstack:4566/000000000000/split-queue \
+          --queue-url http://localstack:4566/000000000000/orchestrator-queue \
           --attributes '{
-            "Policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"events.amazonaws.com\"},\"Action\":\"sqs:SendMessage\",\"Resource\":\"arn:aws:sqs:us-east-1:000000000000:split-queue\"}]}"
+            "Policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"events.amazonaws.com\"},\"Action\":\"sqs:SendMessage\",\"Resource\":\"arn:aws:sqs:us-east-1:000000000000:orchestrator-queue\"}]}"
           }'
 
         aws --endpoint-url=http://localstack:4566 sqs set-queue-attributes \
@@ -123,7 +123,7 @@ services:
             }
           }'
 
-        # Rule 2: Video UPLOADED -> split-queue
+        # Rule 2: Video UPLOADED -> orchestrator-queue
         aws --endpoint-url=http://localstack:4566 events put-rule \
           --name video-uploaded-rule \
           --event-pattern '{
@@ -134,25 +134,14 @@ services:
             }
           }'
 
-        # Rule 3: Video SPLITTING -> print-queue
-        aws --endpoint-url=http://localstack:4566 events put-rule \
-          --name video-splitting-rule \
-          --event-pattern '{
-            "source": ["fiapx.video"],
-            "detail-type": ["Video Status Changed"],
-            "detail": {
-              "status": ["SPLITTING"]
-            }
-          }'
-
-        # Rule 4: Video status changes for notifications (SPLITTING, COMPLETED, FAILED)
+        # Rule 3: Video status changes for notifications (PROCESSING, COMPLETED, FAILED)
         aws --endpoint-url=http://localstack:4566 events put-rule \
           --name video-notification-rule \
           --event-pattern '{
             "source": ["fiapx.video"],
             "detail-type": ["Video Status Changed"],
             "detail": {
-              "status": ["SPLITTING", "COMPLETED", "FAILED"]
+              "status": ["PROCESSING", "COMPLETED", "FAILED"]
             }
           }'
 
@@ -197,23 +186,42 @@ services:
             }
           ]'
 
-        # Target: Video UPLOADED -> split-queue
+        # Target: Video UPLOADED -> orchestrator-queue
         aws --endpoint-url=http://localstack:4566 events put-targets \
           --rule video-uploaded-rule \
           --targets '[
             {
-              "Id": "split-queue-target",
-              "Arn": "arn:aws:sqs:us-east-1:000000000000:split-queue"
+              "Id": "orchestrator-queue-target",
+              "Arn": "arn:aws:sqs:us-east-1:000000000000:orchestrator-queue"
             }
           ]'
 
-        # Target: Video SPLITTING -> print-queue
+        # API Destination para notificações
+        aws --endpoint-url=http://localstack:4566 events create-api-destination \
+          --name fiapx-notification-webhook \
+          --connection-arn arn:aws:events:us-east-1:000000000000:connection/fiapx-api-connection \
+          --invocation-endpoint http://api:3010/videos/webhooks/notification \
+          --http-method POST \
+          --invocation-rate-limit-per-second 10 || true
+
+        # Target: Video PROCESSING/COMPLETED/FAILED -> notification webhook
         aws --endpoint-url=http://localstack:4566 events put-targets \
-          --rule video-splitting-rule \
+          --rule video-notification-rule \
           --targets '[
             {
-              "Id": "print-queue-target",
-              "Arn": "arn:aws:sqs:us-east-1:000000000000:print-queue"
+              "Id": "notification-webhook-target",
+              "Arn": "arn:aws:events:us-east-1:000000000000:api-destination/fiapx-notification-webhook",
+              "InputTransformer": {
+                "InputPathsMap": {
+                  "videoId": "$.detail.videoId",
+                  "status": "$.detail.status",
+                  "userEmail": "$.detail.userEmail",
+                  "videoName": "$.detail.videoName",
+                  "downloadUrl": "$.detail.downloadUrl",
+                  "errorReason": "$.detail.errorReason"
+                },
+                "InputTemplate": "{\"videoId\": <videoId>, \"status\": <status>, \"userEmail\": <userEmail>, \"videoName\": <videoName>, \"downloadUrl\": <downloadUrl>, \"errorReason\": <errorReason>}"
+              }
             }
           ]'
 

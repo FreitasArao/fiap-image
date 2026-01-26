@@ -1,44 +1,70 @@
 import { type Message } from '@aws-sdk/client-sqs'
-import {
-  EventBridgeClient,
-  PutEventsCommand,
-} from '@aws-sdk/client-eventbridge'
-import { AbstractSQSConsumer } from '../../src/modules/messaging/sqs/abstract-sqs-consumer'
-import {
-  createStoragePathBuilder,
-  type StoragePathBuilder,
-} from '../../src/modules/video-processor/infra/services/storage'
+import { EventBridgeClient } from '@aws-sdk/client-eventbridge'
 import { context } from '@opentelemetry/api'
-import { FFmpegService } from './ffmpeg.service'
 import { PinoLoggerService } from '@core/libs/logging/pino-logger'
+import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import { AbstractSQSConsumer } from '@modules/messaging'
+import {
+  StoragePathBuilder,
+  createStoragePathBuilder,
+} from '@modules/video-processor/infra/services/storage'
+import { FFmpegProcessor } from './processors'
+import type { VideoProcessorService, EventEmitter } from './abstractions'
+import { EventBridgeEmitter } from './adapters'
 
-type VideoEvent = {
+export type SegmentEvent = {
   detail: {
     videoId: string
-    videoPath?: string
+    presignedUrl: string
+    segmentNumber: number
+    totalSegments: number
+    startTime: number
+    endTime: number
     userEmail?: string
     videoName?: string
   }
 }
 
-const logger = new PinoLoggerService(
-  {
-    suppressConsole: false,
-  },
-  context.active(),
-)
+export interface PrintWorkerDeps {
+  eventEmitter: EventEmitter
+  processorFactory: (videoId: string) => VideoProcessorService
+  pathBuilder?: StoragePathBuilder
+  outputBucket?: string
+  frameInterval?: number
+}
 
-const eventBridgeClient = new EventBridgeClient({
-  region: process.env.AWS_REGION || 'us-east-1',
-  endpoint: process.env.AWS_ENDPOINT_URL,
-})
+interface PrintWorkerConfig {
+  queueUrl: string
+  region?: string
+  batchSize?: number
+  visibilityTimeout?: number
+  waitTimeSeconds?: number
+  pollingWaitTimeMs?: number
+}
 
-class PrintWorker extends AbstractSQSConsumer<VideoEvent> {
-  private readonly pathBuilder: StoragePathBuilder = createStoragePathBuilder()
-  private outputBucket = process.env.S3_OUTPUT_BUCKET || 'fiapx-video-frames'
-  private frameInterval = parseInt(process.env.FRAME_INTERVAL || '1', 10)
+export class PrintWorker extends AbstractSQSConsumer<SegmentEvent> {
+  private readonly pathBuilder: StoragePathBuilder
+  private readonly outputBucket: string
+  private readonly frameInterval: number
+  private readonly eventEmitter: EventEmitter
+  private readonly processorFactory: (videoId: string) => VideoProcessorService
 
-  protected parseMessage(body: string): VideoEvent | null {
+  constructor(
+    config: PrintWorkerConfig,
+    logger: AbstractLoggerService,
+    deps: PrintWorkerDeps,
+  ) {
+    super(config, logger)
+    this.eventEmitter = deps.eventEmitter
+    this.processorFactory = deps.processorFactory
+    this.pathBuilder = deps.pathBuilder || createStoragePathBuilder()
+    this.outputBucket =
+      deps.outputBucket || process.env.S3_OUTPUT_BUCKET || 'fiapx-video-frames'
+    this.frameInterval =
+      deps.frameInterval || parseInt(process.env.FRAME_INTERVAL || '1', 10)
+  }
+
+  protected parseMessage(body: string): SegmentEvent | null {
     try {
       return JSON.parse(body)
     } catch {
@@ -46,90 +72,109 @@ class PrintWorker extends AbstractSQSConsumer<VideoEvent> {
     }
   }
 
-  protected async handleMessage(event: VideoEvent, _message: Message): Promise<void> {
-    const { videoId, videoPath, userEmail, videoName } = event.detail
+  protected async handleMessage(
+    event: SegmentEvent,
+    _message: Message,
+  ): Promise<void> {
+    const {
+      videoId,
+      presignedUrl,
+      segmentNumber,
+      totalSegments,
+      startTime,
+      endTime,
+      userEmail,
+      videoName,
+    } = event.detail
 
-    if (!videoPath) {
-      throw new Error(`Missing videoPath for video: ${videoId}`)
-    }
+    this.logger.log(
+      `[PRINT] Processing segment ${segmentNumber}/${totalSegments} for video: ${videoId}`,
+    )
+    this.logger.log(`[PRINT] Time range: ${startTime}s - ${endTime}s`)
 
-    const inputBucket = this.pathBuilder.bucket
-    const parsedPath = this.pathBuilder.parse(videoPath)
-
-    if (!parsedPath) {
-      throw new Error(`Invalid videoPath format: ${videoPath}`)
-    }
-
-    this.logger.log(`[PRINT] Processing video: ${videoId}`)
-
-    const ffmpeg = new FFmpegService(videoId)
+    const processor = this.processorFactory(`${videoId}-seg${segmentNumber}`)
 
     try {
-      await ffmpeg.setup()
+      await processor.setup()
 
-      this.logger.log(
-        `[PRINT] Downloading from s3://${inputBucket}/${parsedPath.key}`,
-      )
-      const inputPath = await ffmpeg.download(inputBucket, parsedPath.key)
+      this.logger.log(`[PRINT] Extracting frames from URL (streaming)...`)
 
-      this.logger.log(
-        `[PRINT] Extracting frames (1 every ${this.frameInterval}s)...`,
-      )
-      const { outputDir, count } = await ffmpeg.extractFrames(
-        inputPath,
+      const { outputDir, count } = await processor.extractFramesFromUrl(
+        presignedUrl,
+        startTime,
+        endTime,
         this.frameInterval,
       )
+
       this.logger.log(`[PRINT] Extracted ${count} frames`)
 
       this.logger.log(`[PRINT] Uploading frames to S3...`)
       const printsPrefix = this.pathBuilder
-        .videoPrint(videoId, '')
+        .videoPrint(
+          videoId,
+          `segment_${String(segmentNumber).padStart(3, '0')}`,
+        )
         .key.replace(/\/$/, '')
-      await ffmpeg.uploadDir(
+
+      await processor.uploadDir(
         outputDir,
         this.outputBucket,
         printsPrefix,
         'frame_*.jpg',
       )
 
-      const downloadUrl = `http://localhost:4566/${this.outputBucket}/${printsPrefix}/`
-
-      await this.emitStatusEvent(
+      const isLastSegment = this.checkAndUpdateProgress(
         videoId,
-        'COMPLETED',
-        userEmail,
-        videoName,
-        downloadUrl,
+        segmentNumber,
+        totalSegments,
       )
 
-      this.logger.log(`[PRINT] Complete: ${videoId}`)
+      if (isLastSegment) {
+        const downloadUrl = `http://localhost:4566/${this.outputBucket}/${this.pathBuilder.videoPrint(videoId, '').key}`
+
+        await this.emitStatusEvent(
+          videoId,
+          'COMPLETED',
+          userEmail,
+          videoName,
+          downloadUrl,
+        )
+
+        this.logger.log(`[PRINT] Video ${videoId} completed!`)
+      }
+
+      this.logger.log(
+        `[PRINT] Segment ${segmentNumber}/${totalSegments} complete`,
+      )
     } finally {
-      await ffmpeg.cleanup()
+      await processor.cleanup()
     }
+  }
+
+  checkAndUpdateProgress(
+    videoId: string,
+    segmentNumber: number,
+    totalSegments: number,
+  ): boolean {
+    this.logger.log(
+      `[PRINT] Segment ${segmentNumber}/${totalSegments} processed for video: ${videoId}`,
+    )
+    return segmentNumber === totalSegments
   }
 
   protected override async onError(
     error: Error,
     message: Message,
-    payload?: VideoEvent,
+    payload?: SegmentEvent,
   ): Promise<void> {
-    this.logger.error('[PRINT] Error processing video', {
+    this.logger.error('[PRINT] Error processing segment', {
       error: error.message,
       videoId: payload?.detail?.videoId,
+      segmentNumber: payload?.detail?.segmentNumber,
       messageId: message.MessageId,
     })
 
-    const nonRetryablePatterns = [
-      '404',
-      'does not exist',
-      'NoSuchKey',
-      'invalid',
-      'not found',
-    ]
-
-    const isNonRetryable = nonRetryablePatterns.some((pattern) =>
-      error.message.toLowerCase().includes(pattern.toLowerCase()),
-    )
+    const isNonRetryable = this.isNonRetryableError(error)
 
     if (isNonRetryable && payload?.detail?.videoId) {
       await this.emitStatusEvent(
@@ -143,40 +188,63 @@ class PrintWorker extends AbstractSQSConsumer<VideoEvent> {
     }
   }
 
+  isNonRetryableError(error: Error): boolean {
+    const nonRetryablePatterns = [
+      '404',
+      'does not exist',
+      'NoSuchKey',
+      'invalid',
+      'not found',
+    ]
+
+    return nonRetryablePatterns.some((pattern) =>
+      error.message.toLowerCase().includes(pattern.toLowerCase()),
+    )
+  }
+
   private async emitStatusEvent(
     videoId: string,
-    status: string,
+    status: 'COMPLETED' | 'FAILED',
     userEmail?: string,
     videoName?: string,
     downloadUrl?: string,
     errorReason?: string,
   ): Promise<void> {
-    await eventBridgeClient.send(
-      new PutEventsCommand({
-        Entries: [
-          {
-            Source: 'fiapx.video',
-            DetailType: 'Video Status Changed',
-            Detail: JSON.stringify({
-              videoId,
-              status,
-              userEmail: userEmail || 'user@example.com',
-              videoName: videoName || 'video',
-              downloadUrl: downloadUrl || '',
-              errorReason: errorReason || '',
-              timestamp: new Date().toISOString(),
-            }),
-          },
-        ],
-      }),
-    )
+    await this.eventEmitter.emitVideoStatus({
+      videoId,
+      status,
+      userEmail,
+      videoName,
+      downloadUrl,
+      errorReason,
+    })
     this.logger.log(`[PRINT] Emitted event: ${status}`)
   }
 }
 
-const queueUrl =
-  process.env.SQS_QUEUE_URL || 'http://localhost:4566/000000000000/print-queue'
-const worker = new PrintWorker({ queueUrl }, logger)
+// Bootstrap - only runs when executed directly
+if (import.meta.main) {
+  const logger = new PinoLoggerService(
+    {
+      suppressConsole: false,
+    },
+    context.active(),
+  )
 
-logger.log('Starting Print Worker...')
-worker.start()
+  const eventBridgeClient = new EventBridgeClient({
+    region: process.env.AWS_REGION || 'us-east-1',
+    endpoint: process.env.AWS_ENDPOINT_URL,
+  })
+
+  const queueUrl =
+    process.env.SQS_QUEUE_URL ||
+    'http://localhost:4566/000000000000/print-queue'
+
+  const worker = new PrintWorker({ queueUrl }, logger, {
+    eventEmitter: new EventBridgeEmitter(eventBridgeClient),
+    processorFactory: (videoId) => new FFmpegProcessor(videoId),
+  })
+
+  logger.log('Starting Print Worker...')
+  worker.start()
+}

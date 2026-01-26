@@ -1,7 +1,7 @@
 // CASSANDRA TABLE TYPES - Query-First Design
 // Gerado a partir de docker-compose/init-schema.cql
 
-// Status types - Updated to match new VideoStatusVO
+// Status types - Match new VideoStatusVO
 export type VideoStatus =
   | 'CREATED'
   | 'UPLOADING'
@@ -32,6 +32,8 @@ export type VideoTable = {
   failure_reason?: string
   created_at: Date
   updated_at: Date
+  total_segments?: number
+  processed_segments?: number
 }
 
 // Tabela: video_by_user (materialização)

@@ -8,4 +8,6 @@ export interface VideoRepository<T extends Video = Video> {
   updateVideo(video: T): Promise<Result<void, Error>>
   findById(videoId: string): Promise<Result<T | null, Error>>
   findByIntegrationId(integrationId: string): Promise<Result<T | null, Error>>
+  updateTotalSegments(videoId: string, totalSegments: number): Promise<Result<void, Error>>
+  incrementProcessedSegments(videoId: string): Promise<Result<number, Error>>
 }

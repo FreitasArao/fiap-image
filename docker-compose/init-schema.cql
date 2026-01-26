@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS video (
   created_at TIMESTAMP,
   failure_reason TEXT,
   updated_at TIMESTAMP,
+  total_segments INT,
+  processed_segments INT,
   PRIMARY KEY (video_id)
 );
 

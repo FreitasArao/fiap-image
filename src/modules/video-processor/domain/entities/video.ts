@@ -31,6 +31,8 @@ export class Video extends AggregateRoot<Video> {
   thirdPartyVideoIntegration: VideoThirdPartyIntegrationsMetadataVO | undefined
   userId: UniqueEntityID
   private _failureReason: string | undefined
+  private _totalSegments: number
+  private _processedSegments: number
 
   private constructor({
     metadata,
@@ -41,6 +43,8 @@ export class Video extends AggregateRoot<Video> {
     status,
     userId,
     failureReason,
+    totalSegments,
+    processedSegments,
   }: {
     metadata: VideoMetadataVO
     id?: UniqueEntityID
@@ -50,6 +54,8 @@ export class Video extends AggregateRoot<Video> {
     status: VideoStatusVO
     userId: UniqueEntityID
     failureReason?: string
+    totalSegments?: number
+    processedSegments?: number
   }) {
     super(id ?? UniqueEntityID.create())
     this.metadata = metadata
@@ -59,6 +65,8 @@ export class Video extends AggregateRoot<Video> {
     this._status = status
     this.userId = userId
     this._failureReason = failureReason
+    this._totalSegments = totalSegments ?? 0
+    this._processedSegments = processedSegments ?? 0
   }
 
   get status(): VideoStatusVO {
@@ -71,6 +79,39 @@ export class Video extends AggregateRoot<Video> {
 
   get failureReason(): string | undefined {
     return this._failureReason
+  }
+
+  get totalSegments(): number {
+    return this._totalSegments
+  }
+
+  get processedSegments(): number {
+    return this._processedSegments
+  }
+
+  setTotalSegments(total: number): this {
+    this._totalSegments = total
+    return this
+  }
+
+  incrementProcessedSegments(): number {
+    this._processedSegments += 1
+    return this._processedSegments
+  }
+
+  isFullyProcessed(): boolean {
+    return this._totalSegments > 0 && this._processedSegments >= this._totalSegments
+  }
+
+  getProcessingProgress(): { total: number; processed: number; percentage: number } {
+    return {
+      total: this._totalSegments,
+      processed: this._processedSegments,
+      percentage:
+        this._totalSegments > 0
+          ? Math.round((this._processedSegments / this._totalSegments) * 100)
+          : 0,
+    }
   }
 
   static create(props: {
@@ -96,6 +137,8 @@ export class Video extends AggregateRoot<Video> {
     id: UniqueEntityID
     userId: UniqueEntityID
     failureReason?: string
+    totalSegments?: number
+    processedSegments?: number
   }): Video {
     return new Video({
       metadata: props.metadata,
@@ -106,6 +149,8 @@ export class Video extends AggregateRoot<Video> {
       status: props.status,
       userId: props.userId,
       failureReason: props.failureReason,
+      totalSegments: props.totalSegments,
+      processedSegments: props.processedSegments,
     })
   }
 

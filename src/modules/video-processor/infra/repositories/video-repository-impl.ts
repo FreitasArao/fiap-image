@@ -165,6 +165,8 @@ export class VideoRepositoryImpl
         videoId: videoRow.video_id,
       }),
       failureReason: videoRow.failure_reason,
+      totalSegments: videoRow.total_segments ?? 0,
+      processedSegments: videoRow.processed_segments ?? 0,
     })
 
     return Result.ok(video)
@@ -344,11 +346,66 @@ export class VideoRepositoryImpl
         third_party_video_id: video.thirdPartyVideoIntegration?.uploadId,
         user_id: video.integration?.id.value,
         failure_reason: video.failureReason,
+        total_segments: video.totalSegments,
+        processed_segments: video.processedSegments,
       },
       where: {
         video_id: video.id.value,
       },
     })
     return result.isSuccess ? Result.ok(undefined) : Result.fail(result.error)
+  }
+
+  async updateTotalSegments(
+    videoId: string,
+    totalSegments: number,
+  ): Promise<Result<void, Error>> {
+    this.logger.log('Updating total segments', { videoId, totalSegments })
+    const result = await this.update<VideoTable>({
+      table: 'video',
+      data: {
+        total_segments: totalSegments,
+        updated_at: new Date(),
+      },
+      where: {
+        video_id: videoId,
+      },
+    })
+    return result.isSuccess ? Result.ok(undefined) : Result.fail(result.error)
+  }
+
+  async incrementProcessedSegments(
+    videoId: string,
+  ): Promise<Result<number, Error>> {
+    this.logger.log('Incrementing processed segments', { videoId })
+
+    const videoResult = await this.findById(videoId)
+    if (videoResult.isFailure) {
+      return Result.fail(videoResult.error)
+    }
+
+    const video = videoResult.value
+    if (!video) {
+      return Result.fail(new Error(`Video not found: ${videoId}`))
+    }
+
+    const newCount = video.incrementProcessedSegments()
+
+    const updateResult = await this.update<VideoTable>({
+      table: 'video',
+      data: {
+        processed_segments: newCount,
+        updated_at: new Date(),
+      },
+      where: {
+        video_id: videoId,
+      },
+    })
+
+    if (updateResult.isFailure) {
+      return Result.fail(updateResult.error)
+    }
+
+    return Result.ok(newCount)
   }
 }
