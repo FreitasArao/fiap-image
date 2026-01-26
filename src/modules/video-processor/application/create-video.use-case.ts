@@ -4,6 +4,7 @@ import { Result } from '@core/domain/result'
 import { Video } from '@modules/video-processor/domain/entities/video'
 import { VideoMetadataVO } from '@modules/video-processor/domain/value-objects/video-metadata.vo'
 import { VideoThirdPartyIntegrationsMetadataVO } from '@modules/video-processor/domain/value-objects/video-third-party-integrations-metadata.vo'
+import { VideoExtensionVO } from '@modules/video-processor/domain/value-objects/video-extension.vo'
 import { ThirdPartyIntegration } from '@modules/video-processor/domain/entities/third-party-integration.vo'
 import { VideoPart } from '@modules/video-processor/domain/entities/video-part'
 import { VideoRepository } from '@modules/video-processor/domain/repositories/video.repository'
@@ -18,6 +19,8 @@ import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 export type CreateVideoUseCaseParams = {
   totalSize: number
   duration: number
+  filename: string
+  extension: string
 }
 
 export type CreateVideoUseCaseResult = {
@@ -39,7 +42,19 @@ export class CreateVideoUseCase {
     this.logger.log('Creating video', {
       totalSize: params.totalSize,
       duration: params.duration,
+      filename: params.filename,
+      extension: params.extension,
     })
+
+    const extensionResult = VideoExtensionVO.create(params.extension)
+    if (extensionResult.isFailure) {
+      this.logger.error('Invalid video extension', {
+        extension: params.extension,
+        error: extensionResult.error,
+      })
+      return Result.fail(extensionResult.error)
+    }
+
     const videoId = UniqueEntityID.create().value
 
     this.logger.log('Video ID created', { videoId })
@@ -52,8 +67,12 @@ export class CreateVideoUseCase {
       return Result.fail(policy.error)
     }
 
-    const thirdPartyVideoResult =
-      await this.uploadVideoParts.createUploadId(videoId)
+    const fullFilename = `${params.filename}.${extensionResult.value.value}`
+
+    const thirdPartyVideoResult = await this.uploadVideoParts.createUploadId(
+      videoId,
+      fullFilename,
+    )
     if (thirdPartyVideoResult.isFailure) {
       this.logger.error('Failed to create upload ID', {
         error: thirdPartyVideoResult.error,
@@ -72,13 +91,14 @@ export class CreateVideoUseCase {
       metadata: VideoMetadataVO.create({
         duration: params.duration,
         totalSize: params.totalSize,
+        filename: params.filename,
+        extension: extensionResult.value.value,
       }),
     })
       .withIntegration(ThirdPartyIntegration.create())
-      .addThirdPartyVideoIntegration({
-        id: thirdPartyVideoResult.value.uploadId,
-        bucket: this.uploadVideoParts.bucketName,
-        path: thirdPartyVideoResult.value.key,
+      .setStorageMetadata({
+        uploadId: thirdPartyVideoResult.value.uploadId,
+        storagePath: thirdPartyVideoResult.value.key,
       })
 
     this.logger.log('Video created', { video })

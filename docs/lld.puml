@@ -8,6 +8,7 @@ Container_Boundary(fiapx, "FIAPX API") {
 
     Component(createURLCtrl, "CreateURLController", "Cria multipart upload")
     Component(presignService, "PresignService", "Gera presigned URLs")
+    Component(storagePathBuilder, "StoragePathBuilder", "Gera paths S3 centralizados")
     Component(videoRepo, "VideoRepository", "scylladb")
 
     Component(processVideoCtrl, "ProcessVideoController", "Recebe eventos de part upload")
@@ -44,6 +45,15 @@ Rel(createURLCtrl, presignService, "Gera URLs")
 Rel(presignService, s3, "CreateMultipartUpload")
 Rel(createURLCtrl, videoRepo, "Salva video_id")
 Rel(videoRepo, scylladb, "Persistência")
+
+Rel(presignService, storagePathBuilder, "Gera paths")
+
+note right of storagePathBuilder
+Paths centralizados:
+- video/{id}/file/{name}
+- video/{id}/parts/{partId}
+- video/{id}/prints/{printId}
+end note
 
 note right of presignService
 - Calcula partSize

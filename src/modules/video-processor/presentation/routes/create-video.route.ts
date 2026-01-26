@@ -10,8 +10,10 @@ export const createVideoRoute = BaseElysia.create({ prefix: '' }).post(
     logger.log('Creating video', {
       totalSize: body.totalSize,
       duration: body.duration,
+      filename: body.filename,
+      extension: body.extension,
     })
-    const { totalSize, duration } = body
+    const { totalSize, duration, filename, extension } = body
 
     const useCase = new CreateVideoUseCase(
       new VideoRepositoryImpl(logger),
@@ -22,6 +24,8 @@ export const createVideoRoute = BaseElysia.create({ prefix: '' }).post(
     const result = await useCase.execute({
       totalSize,
       duration,
+      filename,
+      extension,
     })
 
     if (result.isFailure) {
@@ -29,7 +33,7 @@ export const createVideoRoute = BaseElysia.create({ prefix: '' }).post(
       return { message: result.error.message }
     }
 
-    const videoPath = result.value.video.thirdPartyVideoIntegration?.value.path
+    const videoPath = result.value.video.thirdPartyVideoIntegration?.path
 
     if (!videoPath) {
       set.status = StatusMap['Bad Request']
@@ -55,6 +59,10 @@ export const createVideoRoute = BaseElysia.create({ prefix: '' }).post(
     body: t.Object({
       totalSize: t.Number({ description: 'Total video size in bytes' }),
       duration: t.Number({ description: 'Video duration in seconds' }),
+      filename: t.String({ description: 'Video filename without extension' }),
+      extension: t.String({
+        description: 'Video extension (mp4, mov, avi, mkv, webm)',
+      }),
     }),
     response: {
       200: t.Object({

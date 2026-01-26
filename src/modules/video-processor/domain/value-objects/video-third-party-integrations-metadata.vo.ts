@@ -1,22 +1,46 @@
 import { BaseValueObject } from '@core/domain/value-object/base-value-object'
 
-export type ThirdPartyVideoMetadata = {
-  id: string
-  bucket: string
+export type VideoStorageMetadata = {
+  uploadId: string
+  storagePath: string
   videoId: string
 }
 
-export class VideoThirdPartyIntegrationsMetadataVO extends BaseValueObject<ThirdPartyVideoMetadata> {
+export class VideoThirdPartyIntegrationsMetadataVO extends BaseValueObject<VideoStorageMetadata> {
+  private constructor(data: VideoStorageMetadata) {
+    super(data)
+  }
+
   static create(data: {
-    id: string
-    bucket: string
-    path: string
+    uploadId: string
+    storagePath: string
     videoId: string
-  }) {
-    return new VideoThirdPartyIntegrationsMetadataVO(data)
+  }): VideoThirdPartyIntegrationsMetadataVO {
+    return new VideoThirdPartyIntegrationsMetadataVO({
+      uploadId: data.uploadId,
+      storagePath: data.storagePath,
+      videoId: data.videoId,
+    })
+  }
+
+  get uploadId(): string {
+    return this.value.uploadId
   }
 
   get path(): string {
-    return `${this.value.bucket}/video/${this.value.videoId}/${this.value.path}`
+    return this.value.storagePath
+  }
+
+  get key(): string {
+    const parts = this.value.storagePath.split('/')
+    return parts.slice(1).join('/')
+  }
+
+  get bucket(): string {
+    return this.value.storagePath.split('/')[0]
+  }
+
+  get videoId(): string {
+    return this.value.videoId
   }
 }

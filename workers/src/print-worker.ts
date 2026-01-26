@@ -1,9 +1,13 @@
-import { SQSClient, type Message } from '@aws-sdk/client-sqs'
+import { type Message } from '@aws-sdk/client-sqs'
 import {
   EventBridgeClient,
   PutEventsCommand,
 } from '@aws-sdk/client-eventbridge'
 import { AbstractSQSConsumer } from '../../src/modules/messaging/sqs/abstract-sqs-consumer'
+import {
+  createStoragePathBuilder,
+  type StoragePathBuilder,
+} from '../../src/modules/video-processor/infra/services/storage'
 import { context } from '@opentelemetry/api'
 import { FFmpegService } from './ffmpeg.service'
 import { PinoLoggerService } from '@core/libs/logging/pino-logger'
@@ -24,93 +28,97 @@ const logger = new PinoLoggerService(
   context.active(),
 )
 
-const sqsClient = new SQSClient({
-  region: process.env.AWS_REGION || 'us-east-1',
-  endpoint: process.env.AWS_ENDPOINT_URL,
-})
-
 const eventBridgeClient = new EventBridgeClient({
   region: process.env.AWS_REGION || 'us-east-1',
   endpoint: process.env.AWS_ENDPOINT_URL,
 })
 
 class PrintWorker extends AbstractSQSConsumer<VideoEvent> {
-  private inputBucket = process.env.S3_INPUT_BUCKET || 'fiapx-video-parts'
+  private readonly pathBuilder: StoragePathBuilder = createStoragePathBuilder()
   private outputBucket = process.env.S3_OUTPUT_BUCKET || 'fiapx-video-frames'
   private frameInterval = parseInt(process.env.FRAME_INTERVAL || '1', 10)
 
-  protected parseMessage(message: Message): VideoEvent {
-    const body = JSON.parse(message.Body || '{}')
-    return body
-  }
-
-  protected async handleMessage(event: VideoEvent): Promise<void> {
+  protected parseMessage(body: string): VideoEvent | null {
     try {
-      const { videoId, videoPath, userEmail, videoName } = event.detail
-      const s3Key = videoPath || videoId
-
-      this.logger.log(`[PRINT] Processing video: ${videoId}`)
-
-      const ffmpeg = new FFmpegService(videoId)
-
-      try {
-        await ffmpeg.setup()
-
-        this.logger.log(
-          `[PRINT] Downloading from s3://${this.inputBucket}/${s3Key}/`,
-        )
-        const inputPath = await ffmpeg.download(
-          this.inputBucket,
-          `${s3Key}/video.mp4`,
-        )
-
-        this.logger.log(
-          `[PRINT] Extracting frames (1 every ${this.frameInterval}s)...`,
-        )
-        const { outputDir, count } = await ffmpeg.extractFrames(
-          inputPath,
-          this.frameInterval,
-        )
-        this.logger.log(`[PRINT] Extracted ${count} frames`)
-
-        this.logger.log(`[PRINT] Uploading frames to S3...`)
-        await ffmpeg.uploadDir(
-          outputDir,
-          this.outputBucket,
-          `${videoId}/frames`,
-          'frame_*.jpg',
-        )
-
-        const downloadUrl = `http://localhost:4566/${this.outputBucket}/${videoId}/frames/`
-
-        await this.emitStatusEvent(
-          videoId,
-          'COMPLETED',
-          userEmail,
-          videoName,
-          downloadUrl,
-        )
-
-        this.logger.log(`[PRINT] Complete: ${videoId}`)
-      } finally {
-        await ffmpeg.cleanup()
-      }
-    } catch (error) {
-      await this.onError(error as Error, event)
-      return
+      return JSON.parse(body)
+    } catch {
+      return null
     }
   }
 
-  protected async onError(
+  protected async handleMessage(event: VideoEvent, _message: Message): Promise<void> {
+    const { videoId, videoPath, userEmail, videoName } = event.detail
+
+    if (!videoPath) {
+      throw new Error(`Missing videoPath for video: ${videoId}`)
+    }
+
+    const inputBucket = this.pathBuilder.bucket
+    const parsedPath = this.pathBuilder.parse(videoPath)
+
+    if (!parsedPath) {
+      throw new Error(`Invalid videoPath format: ${videoPath}`)
+    }
+
+    this.logger.log(`[PRINT] Processing video: ${videoId}`)
+
+    const ffmpeg = new FFmpegService(videoId)
+
+    try {
+      await ffmpeg.setup()
+
+      this.logger.log(
+        `[PRINT] Downloading from s3://${inputBucket}/${parsedPath.key}`,
+      )
+      const inputPath = await ffmpeg.download(inputBucket, parsedPath.key)
+
+      this.logger.log(
+        `[PRINT] Extracting frames (1 every ${this.frameInterval}s)...`,
+      )
+      const { outputDir, count } = await ffmpeg.extractFrames(
+        inputPath,
+        this.frameInterval,
+      )
+      this.logger.log(`[PRINT] Extracted ${count} frames`)
+
+      this.logger.log(`[PRINT] Uploading frames to S3...`)
+      const printsPrefix = this.pathBuilder
+        .videoPrint(videoId, '')
+        .key.replace(/\/$/, '')
+      await ffmpeg.uploadDir(
+        outputDir,
+        this.outputBucket,
+        printsPrefix,
+        'frame_*.jpg',
+      )
+
+      const downloadUrl = `http://localhost:4566/${this.outputBucket}/${printsPrefix}/`
+
+      await this.emitStatusEvent(
+        videoId,
+        'COMPLETED',
+        userEmail,
+        videoName,
+        downloadUrl,
+      )
+
+      this.logger.log(`[PRINT] Complete: ${videoId}`)
+    } finally {
+      await ffmpeg.cleanup()
+    }
+  }
+
+  protected override async onError(
     error: Error,
-    message: VideoEvent | null,
-  ): Promise<'retry' | 'discard'> {
+    message: Message,
+    payload?: VideoEvent,
+  ): Promise<void> {
     this.logger.error('[PRINT] Error processing video', {
       error: error.message,
-      videoId: message?.detail?.videoId,
+      videoId: payload?.detail?.videoId,
+      messageId: message.MessageId,
     })
 
-    // Non-retryable errors: file not found, invalid format, etc.
     const nonRetryablePatterns = [
       '404',
       'does not exist',
@@ -123,20 +131,16 @@ class PrintWorker extends AbstractSQSConsumer<VideoEvent> {
       error.message.toLowerCase().includes(pattern.toLowerCase()),
     )
 
-    // Emit FAILED event for non-retryable errors
-    if (isNonRetryable && message?.detail?.videoId) {
+    if (isNonRetryable && payload?.detail?.videoId) {
       await this.emitStatusEvent(
-        message.detail.videoId,
+        payload.detail.videoId,
         'FAILED',
-        message.detail.userEmail,
-        message.detail.videoName,
+        payload.detail.userEmail,
+        payload.detail.videoName,
         undefined,
         error.message,
       )
-      return 'discard'
     }
-
-    return 'discard'
   }
 
   private async emitStatusEvent(
@@ -170,10 +174,9 @@ class PrintWorker extends AbstractSQSConsumer<VideoEvent> {
   }
 }
 
-// Start worker
 const queueUrl =
   process.env.SQS_QUEUE_URL || 'http://localhost:4566/000000000000/print-queue'
-const worker = new PrintWorker(logger, sqsClient, queueUrl)
+const worker = new PrintWorker({ queueUrl }, logger)
 
 logger.log('Starting Print Worker...')
 worker.start()

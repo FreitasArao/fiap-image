@@ -143,20 +143,26 @@ export class VideoRepositoryImpl
       }),
     )
 
+    const storagePath = videoRow.object_key.includes('/')
+      ? `${videoRow.bucket_name}/${videoRow.object_key}`
+      : `${videoRow.bucket_name}/video/${videoRow.video_id}/file/${videoRow.object_key}`
+
     const video = Video.createFromDatabase({
       id: UniqueEntityID.create(videoRow.video_id),
       userId: UniqueEntityID.create(videoRow.user_id),
       metadata: VideoMetadataVO.create({
         totalSize: videoRow.total_size,
         duration: videoRow.duration,
+        filename: videoRow.filename || 'video',
+        extension: videoRow.extension || 'mp4',
       }),
       status: VideoStatusVO.create(videoRow.status as VideoStatus),
       parts,
       integration: ThirdPartyIntegration.create(),
       thirdPartyVideoIntegration: VideoThirdPartyIntegrationsMetadataVO.create({
-        id: videoRow.third_party_video_id,
-        bucket: videoRow.bucket_name,
-        path: videoRow.object_key,
+        uploadId: videoRow.third_party_video_id,
+        storagePath,
+        videoId: videoRow.video_id,
       }),
       failureReason: videoRow.failure_reason,
     })
@@ -192,16 +198,18 @@ export class VideoRepositoryImpl
       this.insert<VideoTable>({
         table: 'video',
         data: {
-          bucket_name: video.thirdPartyVideoIntegration.value.bucket,
-          object_key: video.thirdPartyVideoIntegration.value.path,
+          bucket_name: video.thirdPartyVideoIntegration.bucket,
+          object_key: video.thirdPartyVideoIntegration.key,
           video_id: video.id.value,
           user_id: video.userId.value,
           status: video.status.value,
           total_size: video.metadata.value.totalSize,
           duration: video.metadata.value.duration,
+          filename: video.metadata.value.filename,
+          extension: video.metadata.value.extension,
           parts_count: video.parts.length,
           integration_name: video.integration.provider,
-          third_party_video_id: video.thirdPartyVideoIntegration.value.id,
+          third_party_video_id: video.thirdPartyVideoIntegration.uploadId,
           created_at: video.createdAt,
           updated_at: video.updatedAt,
         },
@@ -214,12 +222,12 @@ export class VideoRepositoryImpl
       }),
       this.createVideoByThirdPartyId({
         integration_name: video.integration.provider,
-        third_party_video_id: video.thirdPartyVideoIntegration.value.id,
+        third_party_video_id: video.thirdPartyVideoIntegration.uploadId,
         video_id: video.id.value,
       }),
       this.createVideoByObjectKey({
-        object_key: video.thirdPartyVideoIntegration.value.path,
-        bucket_name: video.thirdPartyVideoIntegration.value.bucket,
+        object_key: video.thirdPartyVideoIntegration.key,
+        bucket_name: video.thirdPartyVideoIntegration.bucket,
         video_id: video.id.value,
       }),
       this.createVideoParts(video),
@@ -330,10 +338,10 @@ export class VideoRepositoryImpl
         parts_count: video.parts.length,
         status: video.status.value,
         updated_at: new Date(),
-        bucket_name: video.thirdPartyVideoIntegration?.value.bucket,
-        object_key: video.thirdPartyVideoIntegration?.value.path,
+        bucket_name: video.thirdPartyVideoIntegration?.bucket,
+        object_key: video.thirdPartyVideoIntegration?.key,
         integration_name: video.integration?.provider,
-        third_party_video_id: video.thirdPartyVideoIntegration?.value.id,
+        third_party_video_id: video.thirdPartyVideoIntegration?.uploadId,
         user_id: video.integration?.id.value,
         failure_reason: video.failureReason,
       },

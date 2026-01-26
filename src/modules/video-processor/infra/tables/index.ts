@@ -22,6 +22,8 @@ export type VideoTable = {
   status: VideoStatus
   total_size: number
   duration: number
+  filename: string
+  extension: string
   parts_count: number
   integration_name: string
   third_party_video_id: string

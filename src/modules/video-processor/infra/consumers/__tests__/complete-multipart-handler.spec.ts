@@ -34,10 +34,10 @@ describe('CompleteMultipartHandler', () => {
       const result = await handler.handle({
         detail: {
           bucket: {
-            name: 'test-bucket',
+            name: video.thirdPartyVideoIntegration?.bucket || 'test-bucket',
           },
           object: {
-            key: video.thirdPartyVideoIntegration?.path || '',
+            key: video.thirdPartyVideoIntegration?.key || '',
           },
           reason: 'CompleteMultipartUpload',
         },
@@ -55,8 +55,10 @@ describe('CompleteMultipartHandler', () => {
 
       await handler.handle({
         detail: {
-          bucket: { name: 'test-bucket' },
-          object: { key: video.thirdPartyVideoIntegration?.path || '' },
+          bucket: {
+            name: video.thirdPartyVideoIntegration?.bucket || 'test-bucket',
+          },
+          object: { key: video.thirdPartyVideoIntegration?.key || '' },
           reason: 'CompleteMultipartUpload',
         },
       })
@@ -74,8 +76,10 @@ describe('CompleteMultipartHandler', () => {
 
       await handler.handle({
         detail: {
-          bucket: { name: 'test-bucket' },
-          object: { key: video.thirdPartyVideoIntegration?.path || '' },
+          bucket: {
+            name: video.thirdPartyVideoIntegration?.bucket || 'test-bucket',
+          },
+          object: { key: video.thirdPartyVideoIntegration?.key || '' },
           reason: 'CompleteMultipartUpload',
         },
       })
@@ -89,7 +93,7 @@ describe('CompleteMultipartHandler', () => {
   })
 
   describe('Error scenarios', () => {
-    it('should fail when video ID is not found in key', async () => {
+    it('should fail when path format is invalid', async () => {
       const result = await handler.handle({
         detail: {
           bucket: { name: 'test-bucket' },
@@ -99,27 +103,27 @@ describe('CompleteMultipartHandler', () => {
       })
 
       expect(result.isFailure).toBeTrue()
-      expect(result.error?.message).toBe('Video ID not found in key')
+      expect(result.error?.message).toBe('Invalid storage path format')
     })
 
     it('should fail when key has insufficient path segments', async () => {
       const result = await handler.handle({
         detail: {
           bucket: { name: 'test-bucket' },
-          object: { key: 'bucket/video' },
+          object: { key: 'video' },
           reason: 'CompleteMultipartUpload',
         },
       })
 
       expect(result.isFailure).toBeTrue()
-      expect(result.error?.message).toBe('Video ID not found in key')
+      expect(result.error?.message).toBe('Invalid storage path format')
     })
 
     it('should fail when video is not found in repository', async () => {
       const result = await handler.handle({
         detail: {
           bucket: { name: 'test-bucket' },
-          object: { key: 'bucket/video/non-existent-id/file.mp4' },
+          object: { key: 'video/non-existent-id/file/video.mp4' },
           reason: 'CompleteMultipartUpload',
         },
       })
@@ -139,8 +143,10 @@ describe('CompleteMultipartHandler', () => {
 
       const result = await handler.handle({
         detail: {
-          bucket: { name: 'test-bucket' },
-          object: { key: video.thirdPartyVideoIntegration?.path || '' },
+          bucket: {
+            name: video.thirdPartyVideoIntegration?.bucket || 'test-bucket',
+          },
+          object: { key: video.thirdPartyVideoIntegration?.key || '' },
           reason: 'CompleteMultipartUpload',
         },
       })
@@ -158,8 +164,10 @@ describe('CompleteMultipartHandler', () => {
 
       const result = await handler.handle({
         detail: {
-          bucket: { name: 'test-bucket' },
-          object: { key: video.thirdPartyVideoIntegration?.path || '' },
+          bucket: {
+            name: video.thirdPartyVideoIntegration?.bucket || 'test-bucket',
+          },
+          object: { key: video.thirdPartyVideoIntegration?.key || '' },
           reason: 'CompleteMultipartUpload',
         },
       })
@@ -177,8 +185,10 @@ describe('CompleteMultipartHandler', () => {
 
       const result = await handler.handle({
         detail: {
-          bucket: { name: 'test-bucket' },
-          object: { key: video.thirdPartyVideoIntegration?.path || '' },
+          bucket: {
+            name: video.thirdPartyVideoIntegration?.bucket || 'test-bucket',
+          },
+          object: { key: video.thirdPartyVideoIntegration?.key || '' },
           reason: 'CompleteMultipartUpload',
         },
       })
@@ -196,8 +206,10 @@ describe('CompleteMultipartHandler', () => {
 
       const result = await handler.handle({
         detail: {
-          bucket: { name: 'test-bucket' },
-          object: { key: video.thirdPartyVideoIntegration?.path || '' },
+          bucket: {
+            name: video.thirdPartyVideoIntegration?.bucket || 'test-bucket',
+          },
+          object: { key: video.thirdPartyVideoIntegration?.key || '' },
           reason: 'CompleteMultipartUpload',
         },
       })
@@ -214,8 +226,10 @@ describe('CompleteMultipartHandler', () => {
 
       const result = await handler.handle({
         detail: {
-          bucket: { name: 'test-bucket' },
-          object: { key: video.thirdPartyVideoIntegration?.path || '' },
+          bucket: {
+            name: video.thirdPartyVideoIntegration?.bucket || 'test-bucket',
+          },
+          object: { key: video.thirdPartyVideoIntegration?.key || '' },
           reason: 'CompleteMultipartUpload',
         },
       })

@@ -1,9 +1,13 @@
-import { SQSClient, type Message } from '@aws-sdk/client-sqs'
+import { type Message } from '@aws-sdk/client-sqs'
 import {
   EventBridgeClient,
   PutEventsCommand,
 } from '@aws-sdk/client-eventbridge'
 import { AbstractSQSConsumer } from '../../src/modules/messaging/sqs/abstract-sqs-consumer'
+import {
+  createStoragePathBuilder,
+  type StoragePathBuilder,
+} from '../../src/modules/video-processor/infra/services/storage'
 
 import { FFmpegService } from './ffmpeg.service'
 import { PinoLoggerService } from '@core/libs/logging/pino-logger'
@@ -25,29 +29,39 @@ const logger = new PinoLoggerService(
   context.active(),
 )
 
-const sqsClient = new SQSClient({
-  region: process.env.AWS_REGION || 'us-east-1',
-  endpoint: process.env.AWS_ENDPOINT_URL,
-})
-
 const eventBridgeClient = new EventBridgeClient({
   region: process.env.AWS_REGION || 'us-east-1',
   endpoint: process.env.AWS_ENDPOINT_URL,
 })
 
 class SplitWorker extends AbstractSQSConsumer<VideoEvent> {
-  private inputBucket = process.env.S3_INPUT_BUCKET || 'fiapx-video-parts'
+  private readonly pathBuilder: StoragePathBuilder = createStoragePathBuilder()
   private outputBucket = process.env.S3_OUTPUT_BUCKET || 'fiapx-video-frames'
   private segmentDuration = parseInt(process.env.SEGMENT_DURATION || '10', 10)
 
-  protected parseMessage(message: Message): VideoEvent {
-    const body = JSON.parse(message.Body || '{}')
-    return body
+  protected parseMessage(body: string): VideoEvent | null {
+    try {
+      return JSON.parse(body)
+    } catch {
+      return null
+    }
   }
 
-  protected async handleMessage(event: VideoEvent): Promise<void> {
+  protected async handleMessage(event: VideoEvent, _message: Message): Promise<void> {
     const { videoId, videoPath, userEmail, videoName } = event.detail
-    const s3Key = videoPath || videoId
+
+    if (!videoPath) {
+      throw new Error(`Missing videoPath for video: ${videoId}`)
+    }
+
+    const inputBucket = this.pathBuilder.bucket
+    const inputStoragePath = this.pathBuilder.parse(videoPath)
+
+    if (!inputStoragePath) {
+      throw new Error(`Invalid videoPath format: ${videoPath}`)
+    }
+
+    const s3Key = inputStoragePath.key
 
     this.logger.log(`[SPLIT] Processing video: ${videoId}`)
 
@@ -56,10 +70,8 @@ class SplitWorker extends AbstractSQSConsumer<VideoEvent> {
     try {
       await ffmpeg.setup()
 
-      this.logger.log(
-        `[SPLIT] Downloading from s3://${this.inputBucket}/${s3Key}`,
-      )
-      const inputPath = await ffmpeg.download(this.inputBucket, s3Key)
+      this.logger.log(`[SPLIT] Downloading from s3://${inputBucket}/${s3Key}`)
+      const inputPath = await ffmpeg.download(inputBucket, s3Key)
 
       this.logger.log(
         `[SPLIT] Splitting into ${this.segmentDuration}s segments...`,
@@ -71,55 +83,32 @@ class SplitWorker extends AbstractSQSConsumer<VideoEvent> {
       this.logger.log(`[SPLIT] Created ${count} segments`)
 
       this.logger.log(`[SPLIT] Uploading segments to S3...`)
+      const partsPrefix = this.pathBuilder.videoPart(videoId, '').key.replace(/\/$/, '')
       await ffmpeg.uploadDir(
         outputDir,
         this.outputBucket,
-        `${videoId}/segments`,
+        partsPrefix,
         'segment_*.mp4',
       )
 
       await this.emitStatusEvent(videoId, 'SPLITTING', userEmail, videoName)
 
       this.logger.log(`[SPLIT] Complete: ${videoId}`)
-    } catch (error) {
-      await this.onError(error as Error, event)
-      return
     } finally {
       await ffmpeg.cleanup()
     }
   }
 
-  protected async onError(
+  protected override async onError(
     error: Error,
-    message: VideoEvent | null,
-  ): Promise<'retry' | 'discard'> {
+    message: Message,
+    payload?: VideoEvent,
+  ): Promise<void> {
     this.logger.error('[SPLIT] Error processing video', {
       error: error.message,
-      videoId: message?.detail?.videoId,
+      videoId: payload?.detail?.videoId,
+      messageId: message.MessageId,
     })
-
-    // Non-retryable errors: file not found, invalid format, etc.
-    const nonRetryablePatterns = [
-      '404',
-      'does not exist',
-      'NoSuchKey',
-      'invalid',
-      'not found',
-    ]
-
-    const isNonRetryable = nonRetryablePatterns.some((pattern) =>
-      error.message.toLowerCase().includes(pattern.toLowerCase()),
-    )
-
-    if (isNonRetryable) {
-      this.logger.warn('[SPLIT] Non-retryable error, discarding message', {
-        videoId: message?.detail?.videoId,
-      })
-
-      return 'discard'
-    }
-
-    return 'discard'
   }
 
   private async emitStatusEvent(
@@ -151,7 +140,7 @@ class SplitWorker extends AbstractSQSConsumer<VideoEvent> {
 
 const queueUrl =
   process.env.SQS_QUEUE_URL || 'http://localhost:4566/000000000000/split-queue'
-const worker = new SplitWorker(logger, sqsClient, queueUrl)
+const worker = new SplitWorker({ queueUrl }, logger)
 
 logger.log('Starting Split Worker...')
 worker.start()

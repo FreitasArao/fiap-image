@@ -1,10 +1,9 @@
 import { Result } from '@core/domain/result'
 
 export interface UploadVideoPartsService {
-  readonly bucketName: string
-
   createUploadId(
     videoId: string,
+    fullFilename: string,
   ): Promise<Result<{ uploadId: string; key: string }, Error>>
 
   createPartUploadURL(params: {

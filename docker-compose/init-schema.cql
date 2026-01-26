@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS video (
   status TEXT,
   total_size BIGINT,
   duration BIGINT,
+  filename TEXT,
+  extension TEXT,
   parts_count INT,
   integration_name TEXT,
   third_party_video_id TEXT,

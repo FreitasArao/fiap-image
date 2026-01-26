@@ -133,6 +133,10 @@ export class Video extends AggregateRoot<Video> {
     return this.transitionTo('SPLITTING')
   }
 
+  isUploading(): boolean {
+    return this._status.value === 'UPLOADING'
+  }
+
   startPrinting(): Result<this, InvalidStatusTransitionError> {
     return this.transitionTo('PRINTING')
   }
@@ -209,18 +213,50 @@ export class Video extends AggregateRoot<Video> {
     this._parts.push(part)
   }
 
-  addThirdPartyVideoIntegration(thirdPartyVideoIntegration: {
-    bucket: string
-    path: string
-    id: string
+  startUploadingIfNeeded(): Result<this, InvalidStatusTransitionError> {
+    if (this._status.value === 'CREATED') {
+      return this.startUploading()
+    }
+    return Result.ok(this)
+  }
+
+  getPendingPartsBatch(batchSize: number): {
+    batch: VideoPart[]
+    nextPartNumber: number | null
+  } {
+    const pendingParts = [...this._parts]
+      .filter((part) => !part.url || part.url === '')
+      .sort((a, b) => a.partNumber - b.partNumber)
+
+    const batch = pendingParts.slice(0, batchSize)
+    const hasMoreParts = batch.length < pendingParts.length
+    const nextPartNumber = hasMoreParts
+      ? pendingParts[batch.length].partNumber
+      : null
+
+    return { batch, nextPartNumber }
+  }
+
+  assignUrlToPart(partNumber: number, url: string): Result<this, Error> {
+    const index = this._parts.findIndex((p) => p.partNumber === partNumber)
+    if (index === -1) {
+      return Result.fail(new Error(`Part ${partNumber} not found in video`))
+    }
+
+    this._parts[index] = VideoPart.assignUrl(this._parts[index], url)
+    return Result.ok(this)
+  }
+
+  setStorageMetadata(metadata: {
+    uploadId: string
+    storagePath: string
   }): this & {
     thirdPartyVideoIntegration: VideoThirdPartyIntegrationsMetadataVO
   } {
     this.thirdPartyVideoIntegration =
       VideoThirdPartyIntegrationsMetadataVO.create({
-        bucket: thirdPartyVideoIntegration.bucket,
-        path: thirdPartyVideoIntegration.path,
-        id: thirdPartyVideoIntegration.id,
+        uploadId: metadata.uploadId,
+        storagePath: metadata.storagePath,
         videoId: this.id.value,
       })
 

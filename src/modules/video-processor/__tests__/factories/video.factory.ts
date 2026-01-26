@@ -4,47 +4,44 @@ import { UniqueEntityID } from '@core/domain/value-objects/unique-entity-id.vo'
 import { ThirdPartyIntegration } from '@modules/video-processor/domain/entities/third-party-integration.vo'
 import { VideoStatusVO } from '@modules/video-processor/domain/value-objects/video-status.vo'
 import { VideoThirdPartyIntegrationsMetadataVO } from '@modules/video-processor/domain/value-objects/video-third-party-integrations-metadata.vo'
-import { VideoPart } from '@modules/video-processor/domain/entities/video-part'
+
+import { MegabytesValueObject } from '@modules/video-processor/domain/value-objects/megabytes.vo'
 
 export class VideoFactory {
   static create(override: Partial<Video> = {}): Video {
-    const video = Video.create({
+    const baseVideo = Video.create({
       userId: UniqueEntityID.create(),
       metadata: VideoMetadataVO.create({
-        totalSize: 1024 * 1021 * 50, // 50MB
+        totalSize: MegabytesValueObject.create(50).value,
         duration: 60,
+        filename: 'test-video',
+        extension: 'mp4',
       }),
+    }).withIntegration(ThirdPartyIntegration.create())
+
+    const storagePath = `test-bucket/video/${baseVideo.id.value}/file/test-video.mp4`
+
+    const video = baseVideo.setStorageMetadata({
+      uploadId: 'upload-id-123',
+      storagePath,
     })
-      .withIntegration(ThirdPartyIntegration.create())
-      .addThirdPartyVideoIntegration({
-        id: 'upload-id-123',
-        bucket: 'test-bucket',
-        path: 'test-path/video.mp4',
-      })
 
     if (override.status) {
-      // Force status change via reflection or recreating entity if possible
-      // Since we don't have public setter, we might need to rely on transitions or createFromDatabase
-      // createFromDatabase is better for factories
-
       return Video.createFromDatabase({
         id: video.id,
         userId: video.userId,
         metadata: video.metadata,
         status: VideoStatusVO.create(override.status.value),
-        parts: (override.parts as VideoPart[]) || [],
-        integration:
-          (override.integration as ThirdPartyIntegration) ||
-          ThirdPartyIntegration.create(),
+        parts: override.parts || [],
+        integration: override.integration || ThirdPartyIntegration.create(),
         thirdPartyVideoIntegration:
-          (override.thirdPartyVideoIntegration as VideoThirdPartyIntegrationsMetadataVO) ||
+          override.thirdPartyVideoIntegration ||
           VideoThirdPartyIntegrationsMetadataVO.create({
-            id: 'upload-123',
-            bucket: 'test-bucket',
-            path: 'test-path',
+            uploadId: 'upload-123',
+            storagePath: `test-bucket/video/${video.id.value}/file/test-video.mp4`,
             videoId: video.id.value,
           }),
-        failureReason: override.failureReason as string | undefined,
+        failureReason: override.failureReason,
       })
     }
 

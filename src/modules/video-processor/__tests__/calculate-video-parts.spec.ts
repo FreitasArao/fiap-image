@@ -12,6 +12,8 @@ describe("CalculateVideoParts", () => {
     const videoMetadata = VideoMetadataVO.create({
       totalSize: MegabytesValueObject.create(4).value,
       duration: 100000000,
+      filename: 'test',
+      extension: 'mp4',
     });
     const parts = sut.create(videoMetadata);
 
@@ -53,6 +55,8 @@ describe("CalculateVideoParts", () => {
       const videoMetadata = VideoMetadataVO.create({
         totalSize: size.value,
         duration: 100000000,
+        filename: 'test',
+        extension: 'mp4',
       });
 
       const parts = sut.create(videoMetadata);

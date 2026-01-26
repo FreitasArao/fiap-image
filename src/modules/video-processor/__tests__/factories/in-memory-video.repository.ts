@@ -38,7 +38,7 @@ export class InMemoryVideoRepository implements VideoRepository {
     integrationId: string,
   ): Promise<Result<Video | null, Error>> {
     const video = this.items.find(
-      (v) => v.thirdPartyVideoIntegration?.value.id === integrationId,
+      (v) => v.thirdPartyVideoIntegration?.uploadId === integrationId,
     )
     return Result.ok(video || null)
   }

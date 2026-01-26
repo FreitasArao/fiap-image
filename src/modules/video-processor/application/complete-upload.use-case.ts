@@ -60,8 +60,8 @@ export class CompleteUploadUseCase {
     if (parts.length === 0)
       return Result.fail(new Error('No parts with ETags found'))
 
-    const uploadId = video.thirdPartyVideoIntegration?.value.id
-    const key = video.thirdPartyVideoIntegration?.value.path
+    const uploadId = video.thirdPartyVideoIntegration?.uploadId
+    const key = video.thirdPartyVideoIntegration?.path
     const isMissingUploadIdOrKey = !uploadId || !key
     if (isMissingUploadIdOrKey)
       return Result.fail(new Error('Missing upload ID or key'))
@@ -88,8 +88,7 @@ export class CompleteUploadUseCase {
             DetailType: 'Video Status Changed',
             Detail: JSON.stringify({
               videoId,
-              videoPath:
-                video.thirdPartyVideoIntegration?.value.path || videoId,
+              videoPath: video.thirdPartyVideoIntegration?.path || videoId,
               status: 'UPLOADED',
               timestamp: new Date().toISOString(),
             }),
