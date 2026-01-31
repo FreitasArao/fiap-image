@@ -1,19 +1,12 @@
 import { logger } from '@modules/logging'
 import { VideoRepositoryImpl } from '@modules/video-processor/infra/repositories/video-repository-impl'
-import { CompleteMultipartConsumer } from './complete-multipart.consumer'
+import type { AbstractSQSConsumer } from '@modules/messaging/sqs'
+import type { CompleteMultipartEvent } from '@core/messaging/schemas'
+import { createCompleteMultipartConsumer } from './complete-multipart.consumer'
 import { CompleteMultipartHandler } from './complete-multipart-handler'
 
-let consumerInstance: CompleteMultipartConsumer | null = null
+let consumerInstance: AbstractSQSConsumer<CompleteMultipartEvent> | null = null
 
-/**
- * Starts the SQS consumers for the video processor module.
- * This should be called after the API server starts.
- *
- * Consumers:
- * - CompleteMultipartConsumer: Handles S3 CompleteMultipartUpload events
- *   Queue: multipart-complete-queue
- *   Flow: S3 → EventBridge → SQS → This Consumer → DB Update → EventBridge (UPLOADED)
- */
 export function startConsumers(): void {
   const queueUrl = process.env.COMPLETE_MULTIPART_QUEUE_URL
 
@@ -26,16 +19,12 @@ export function startConsumers(): void {
 
   const videoRepository = new VideoRepositoryImpl(logger)
   const handler = new CompleteMultipartHandler(logger, videoRepository)
-  consumerInstance = new CompleteMultipartConsumer(logger, handler)
+  consumerInstance = createCompleteMultipartConsumer(logger, handler, queueUrl)
 
   consumerInstance.start()
   logger.log('CompleteMultipartConsumer started', { queueUrl })
 }
 
-/**
- * Stops all running consumers gracefully.
- * Should be called on API shutdown.
- */
 export function stopConsumers(): void {
   if (consumerInstance) {
     consumerInstance.stop()
@@ -43,5 +32,9 @@ export function stopConsumers(): void {
   }
 }
 
-export { CompleteMultipartConsumer } from './complete-multipart.consumer'
+export {
+  createCompleteMultipartConsumer,
+  CompleteMultipartMessageHandler,
+} from './complete-multipart.consumer'
 export { CompleteMultipartHandler } from './complete-multipart-handler'
+export type { CompleteMultipartEvent } from '@core/messaging/schemas'

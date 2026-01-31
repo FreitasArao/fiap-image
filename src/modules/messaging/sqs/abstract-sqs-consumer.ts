@@ -1,8 +1,14 @@
 import { Consumer } from 'sqs-consumer'
 import { SQSClient, type Message } from '@aws-sdk/client-sqs'
-import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import {
+  GenericEnvelopeSchema,
+  type MessageContext,
+  type MessageHandler,
+  type EnvelopeMetadata,
+} from '@core/messaging'
 
-interface BaseConsumerConfig {
+export interface SQSConsumerConfig {
   queueUrl: string
   region?: string
   batchSize?: number
@@ -11,25 +17,29 @@ interface BaseConsumerConfig {
   pollingWaitTimeMs?: number
 }
 
-export abstract class AbstractSQSConsumer<T> {
+export abstract class AbstractSQSConsumer<TPayload> {
   private consumer: Consumer
   protected client: SQSClient
-  protected config: Required<BaseConsumerConfig>
+  protected config: Required<SQSConsumerConfig>
 
   constructor(
-    config: BaseConsumerConfig,
+    config: SQSConsumerConfig,
     protected readonly logger: AbstractLoggerService,
+    private readonly handler: MessageHandler<TPayload>,
   ) {
     this.config = {
-      region: config.region || process.env.AWS_REGION || 'us-east-1',
-      batchSize: config.batchSize || 10,
-      visibilityTimeout: config.visibilityTimeout || 30,
-      waitTimeSeconds: config.waitTimeSeconds || 20,
-      pollingWaitTimeMs: config.pollingWaitTimeMs || 0,
+      region: config.region ?? process.env.AWS_REGION ?? 'us-east-1',
+      batchSize: config.batchSize ?? 10,
+      visibilityTimeout: config.visibilityTimeout ?? 30,
+      waitTimeSeconds: config.waitTimeSeconds ?? 20,
+      pollingWaitTimeMs: config.pollingWaitTimeMs ?? 0,
       queueUrl: config.queueUrl,
     }
 
-    this.client = new SQSClient({ region: this.config.region })
+    this.client = new SQSClient({
+      region: this.config.region,
+      endpoint: process.env.AWS_ENDPOINT_URL,
+    })
 
     this.consumer = Consumer.create({
       queueUrl: this.config.queueUrl,
@@ -38,56 +48,67 @@ export abstract class AbstractSQSConsumer<T> {
       visibilityTimeout: this.config.visibilityTimeout,
       waitTimeSeconds: this.config.waitTimeSeconds,
       pollingWaitTimeMs: this.config.pollingWaitTimeMs,
-      handleMessage: async (message) => {
-        return await this.processMessage(message)
-      },
+      handleMessage: async (message) => this.processMessage(message),
     })
 
     this.setupEventListeners()
   }
 
-  protected abstract parseMessage(body: string): T | null
-  protected abstract handleMessage(payload: T, message: Message): Promise<void>
+  private parseBody(body: string): { payload: unknown; metadata: EnvelopeMetadata | null } {
+    const parsed = JSON.parse(body)
+    const envelopeResult = GenericEnvelopeSchema.safeParse(parsed)
 
-  protected async onError(
-    error: Error,
-    message: Message,
-    payload?: T,
-  ): Promise<void> {
-    this.logger.error('Error processing message:', {
-      error: error.message,
-      messageId: message.MessageId,
-      payload,
-    })
-  }
+    if (envelopeResult.success) {
+      return {
+        payload: envelopeResult.data.payload,
+        metadata: envelopeResult.data.metadata,
+      }
+    }
 
-  protected async onStart(): Promise<void> {
-    this.logger.log(`Starting consumer for ${this.config.queueUrl}`)
-  }
-
-  protected async onStop(): Promise<void> {
-    this.logger.log(`Consumer stopped for ${this.config.queueUrl}`)
+    return { payload: parsed, metadata: null }
   }
 
   private async processMessage(message: Message): Promise<Message> {
-    let payload: T | null = null
+    const body = message.Body ?? '{}'
+    let context: MessageContext | null = null
 
     try {
-      payload = this.parseMessage(message.Body || '{}')
+      const { payload, metadata } = this.parseBody(body)
 
-      if (payload === null) {
-        throw new Error('Invalid message format')
+      context = {
+        metadata,
+        sqsMessage: message,
+        messageId: message.MessageId,
       }
 
-      await this.handleMessage(payload, message)
+      this.logger.log('Processing message', {
+        messageId: message.MessageId,
+        correlationId: metadata?.correlationId,
+        traceId: metadata?.traceId,
+        eventType: metadata?.eventType,
+        isEnvelope: metadata !== null,
+      })
+
+      const parseResult = this.handler.parse(payload)
+
+      if (!parseResult.success) {
+        throw new Error(`Payload validation failed: ${parseResult.error}`)
+      }
+
+      await this.handler.handle(parseResult.data, context)
+
+      this.logger.log('Message processed', {
+        messageId: message.MessageId,
+        correlationId: metadata?.correlationId,
+      })
 
       return message
     } catch (error) {
-      await this.onError(
-        error instanceof Error ? error : new Error(String(error)),
-        message,
-        payload || undefined,
-      )
+      this.logger.error('Error processing message', {
+        error: error instanceof Error ? error.message : String(error),
+        messageId: message.MessageId,
+        correlationId: context?.metadata?.correlationId,
+      })
 
       throw error
     }
@@ -106,12 +127,12 @@ export abstract class AbstractSQSConsumer<T> {
       this.logger.error('Timeout error:', err)
     })
 
-    this.consumer.on('started', async () => {
-      await this.onStart()
+    this.consumer.on('started', () => {
+      this.logger.log(`Consumer started for ${this.config.queueUrl}`)
     })
 
-    this.consumer.on('stopped', async () => {
-      await this.onStop()
+    this.consumer.on('stopped', () => {
+      this.logger.log(`Consumer stopped for ${this.config.queueUrl}`)
     })
   }
 
@@ -127,3 +148,13 @@ export abstract class AbstractSQSConsumer<T> {
     return this.consumer.status.isRunning
   }
 }
+
+export function createSQSConsumer<TPayload>(
+  config: SQSConsumerConfig,
+  logger: AbstractLoggerService,
+  handler: MessageHandler<TPayload>,
+): SQSConsumer<TPayload> {
+  return new SQSConsumer(config, logger, handler)
+}
+
+class SQSConsumer<TPayload> extends AbstractSQSConsumer<TPayload> {}

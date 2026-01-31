@@ -17,6 +17,7 @@ export class EventBridgeEmitter implements EventEmitter {
             Detail: JSON.stringify({
               videoId: event.videoId,
               status: event.status,
+              correlationId: event.correlationId || '',
               userEmail: event.userEmail || 'user@example.com',
               videoName: event.videoName || 'video',
               downloadUrl: event.downloadUrl || '',

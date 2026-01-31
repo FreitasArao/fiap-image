@@ -1,0 +1,26 @@
+FROM oven/bun:1 AS base
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    awscli \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY package.json bun.lock ./
+RUN bun install
+
+COPY src/core/ ./src/core/
+
+COPY src/modules/messaging/ ./src/modules/messaging/
+COPY src/modules/video-processor/infra/ ./src/modules/video-processor/infra/
+
+COPY workers/src/ ./workers/src/
+COPY tsconfig.json ./
+
+ENV AWS_REGION=us-east-1
+ENV AWS_ENDPOINT_URL=http://localstack:4566
+ENV S3_INPUT_BUCKET=fiapx-video-parts
+ENV S3_OUTPUT_BUCKET=fiapx-video-frames
+
+CMD ["bun", "run", "workers/src/orchestrator-worker.ts"]

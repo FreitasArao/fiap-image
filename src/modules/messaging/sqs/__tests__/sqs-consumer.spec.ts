@@ -1,120 +1,114 @@
-import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
-import { mockClient } from 'aws-sdk-client-mock'
-import {
-  SQSClient,
-  ReceiveMessageCommand,
-  DeleteMessageCommand,
-  type Message,
-} from '@aws-sdk/client-sqs'
-import { AbstractSQSConsumer } from '../abstract-sqs-consumer'
-import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
+import type { MessageHandler, MessageContext, ParseResult } from '@core/messaging'
+import { createSQSConsumer } from '../abstract-sqs-consumer'
+import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 
-const sqsMock = mockClient(SQSClient)
+class TestMessageHandler implements MessageHandler<{ id: string; value: number }> {
+  public parsedPayloads: unknown[] = []
+  public handledPayloads: Array<{ payload: unknown; context: MessageContext }> = []
+  public shouldFailParse = false
+  public shouldFailHandle = false
 
-class TestConsumer extends AbstractSQSConsumer<{ id: string }> {
-  public handledMessages: { id: string }[] = []
+  parse(rawPayload: unknown): ParseResult<{ id: string; value: number }> {
+    this.parsedPayloads.push(rawPayload)
 
-  protected parseMessage(body: string): { id: string } | null {
-    return JSON.parse(body)
+    if (this.shouldFailParse) {
+      return { success: false, error: 'Parse failed' }
+    }
+
+    const payload = rawPayload as { id?: string; value?: number }
+    if (!payload.id || typeof payload.value !== 'number') {
+      return { success: false, error: 'Invalid payload structure' }
+    }
+
+    return {
+      success: true,
+      data: { id: payload.id, value: payload.value },
+    }
   }
 
-  protected async handleMessage(message: { id: string }): Promise<void> {
-    this.handledMessages.push(message)
-  }
-
-  protected onError(
-    error: Error,
-    message: Message,
-    payload?: { id: string } | undefined,
+  async handle(
+    payload: { id: string; value: number },
+    context: MessageContext,
   ): Promise<void> {
-    this.logger.error('Error processing message:', {
-      error: error.message,
-      message: message.MessageId,
-      payload: payload,
-    })
+    this.handledPayloads.push({ payload, context })
 
-    return Promise.resolve()
+    if (this.shouldFailHandle) {
+      throw new Error('Handle failed')
+    }
   }
 }
 
 describe('AbstractSQSConsumer', () => {
   let logger: AbstractLoggerService
-  let consumer: TestConsumer
+  let handler: TestMessageHandler
 
   beforeEach(() => {
-    sqsMock.reset()
-
     logger = {
       log: mock(),
       error: mock(),
       warn: mock(),
       debug: mock(),
     } as unknown as AbstractLoggerService
-
-    consumer = new TestConsumer(
-      {
-        queueUrl: 'http://queue.url',
-        region: 'us-east-1',
-        batchSize: 10,
-        visibilityTimeout: 30,
-        waitTimeSeconds: 20,
-        pollingWaitTimeMs: 0,
-      },
-      logger,
-    )
+    handler = new TestMessageHandler()
   })
 
-  afterEach(() => {
-    sqsMock.reset()
+  describe('constructor', () => {
+    it('should create consumer with handler', () => {
+      const consumer = createSQSConsumer(
+        { queueUrl: 'http://test.url' },
+        logger,
+        handler,
+      )
+
+      expect(consumer).toBeDefined()
+      expect(consumer.isRunning()).toBe(false)
+    })
   })
 
-  it('should consume messages', async () => {
-    // First call returns one message, second returns empty
-    sqsMock
-      .on(ReceiveMessageCommand)
-      .resolvesOnce({
-        Messages: [
-          {
-            MessageId: '1',
-            ReceiptHandle: 'handle-1',
-            Body: JSON.stringify({ id: 'msg-1' }),
-          },
-        ],
-      })
-      .resolves({ Messages: [] })
+  describe('handler integration', () => {
+    it('should parse valid payload structure', () => {
+      const result = handler.parse({ id: 'test-1', value: 100 })
 
-    sqsMock.on(DeleteMessageCommand).resolves({})
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.id).toBe('test-1')
+        expect(result.data.value).toBe(100)
+      }
+    })
 
-    consumer.start()
+    it('should fail for invalid payload structure', () => {
+      const result = handler.parse({ invalid: 'data' })
 
-    await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.error).toBe('Invalid payload structure')
+      }
+    })
 
-    expect(consumer.isRunning()).toBe(true)
-  })
+    it('should handle payload with context', async () => {
+      const payload = { id: 'test-1', value: 42 }
+      const msgContext: MessageContext = {
+        metadata: {
+          messageId: 'msg-123',
+          correlationId: 'corr-456',
+          traceId: 'trace-789',
+          spanId: 'span-012',
+          source: 'test',
+          eventType: 'test.event',
+          version: '1.0',
+          timestamp: new Date().toISOString(),
+          retryCount: 0,
+          maxRetries: 3,
+        },
+        messageId: 'sqs-msg-id',
+      }
 
-  it('should skip messages without body', async () => {
-    sqsMock
-      .on(ReceiveMessageCommand)
-      .resolvesOnce({
-        Messages: [
-          {
-            MessageId: '1',
-            ReceiptHandle: 'handle-1',
-            Body: undefined, // No body
-          },
-          {
-            MessageId: '2',
-            ReceiptHandle: 'handle-2',
-            Body: JSON.stringify({ id: 'msg-2' }),
-          },
-        ],
-      })
-      .resolves({ Messages: [] })
+      await handler.handle(payload, msgContext)
 
-    consumer.start()
-
-    await new Promise((resolve) => setTimeout(resolve, 100))
-
-    expect(consumer.isRunning()).toBe(true)
+      expect(handler.handledPayloads.length).toBe(1)
+      expect(handler.handledPayloads[0].payload).toEqual(payload)
+      expect(handler.handledPayloads[0].context.metadata?.correlationId).toBe('corr-456')
+    })
   })
 })

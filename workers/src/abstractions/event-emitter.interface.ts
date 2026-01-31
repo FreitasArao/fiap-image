@@ -1,6 +1,7 @@
 export interface VideoStatusEvent {
   videoId: string
   status: 'COMPLETED' | 'FAILED'
+  correlationId?: string
   userEmail?: string
   videoName?: string
   downloadUrl?: string

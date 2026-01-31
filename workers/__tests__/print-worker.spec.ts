@@ -1,27 +1,22 @@
-import { describe, expect, it, mock } from 'bun:test'
-
+import { describe, expect, it, mock, beforeEach, spyOn } from 'bun:test'
+import { context } from '@opentelemetry/api'
+import { PinoLoggerService } from '@core/libs/logging/pino-logger'
 import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
-
 import { StoragePathBuilder } from '@modules/video-processor/infra/services/storage'
-import type { Message } from '@aws-sdk/client-sqs'
-import {
+import type { MessageContext } from '@core/messaging'
+import type { SegmentEvent } from '@core/messaging/schemas'
+import type {
   EventEmitter,
   VideoProcessorService,
   VideoStatusEvent,
 } from '@workers/abstractions'
 import {
-  PrintWorker,
-  SegmentEvent,
+  SegmentEventHandler,
   PrintWorkerDeps,
 } from '@workers/print-worker'
 
 function createMockLogger(): AbstractLoggerService {
-  return {
-    log: mock(),
-    error: mock(),
-    warn: mock(),
-    debug: mock(),
-  } as unknown as AbstractLoggerService
+  return new PinoLoggerService({ suppressConsole: true }, context.active())
 }
 
 function createMockProcessor(): VideoProcessorService {
@@ -55,54 +50,58 @@ function createTestPathBuilder(): StoragePathBuilder {
   })
 }
 
-class TestPrintWorker extends PrintWorker {
-  public testParseMessage(body: string): SegmentEvent | null {
-    return this.parseMessage(body)
-  }
-
-  public async testHandleMessage(
-    event: SegmentEvent,
-    message: Message,
-  ): Promise<void> {
-    return this.handleMessage(event, message)
-  }
-
-  public async testOnError(
-    error: Error,
-    message: Message,
-    payload?: SegmentEvent,
-  ): Promise<void> {
-    return this.onError(error, message, payload)
-  }
-}
-
-function createTestWorker(deps: Partial<PrintWorkerDeps> = {}) {
+function createTestHandler(deps: Partial<PrintWorkerDeps> = {}) {
   const logger = createMockLogger()
-  const eventEmitter = createMockEventEmitter()
+  const eventEmitter = deps.eventEmitter ?? createMockEventEmitter()
   const processor = createMockProcessor()
 
   const fullDeps: PrintWorkerDeps = {
-    eventEmitter: deps.eventEmitter || eventEmitter,
-    processorFactory: deps.processorFactory || (() => processor),
-    pathBuilder: deps.pathBuilder || createTestPathBuilder(),
-    outputBucket: deps.outputBucket || 'test-bucket',
-    frameInterval: deps.frameInterval || 1,
+    logger,
+    eventEmitter,
+    processorFactory: deps.processorFactory ?? (() => processor),
+    pathBuilder: deps.pathBuilder ?? createTestPathBuilder(),
+    outputBucket: deps.outputBucket ?? 'test-bucket',
+    frameInterval: deps.frameInterval ?? 1,
   }
 
-  const worker = new TestPrintWorker(
-    { queueUrl: 'http://localhost:4566/000000000000/test-queue' },
-    logger,
-    fullDeps,
-  )
+  const handler = new SegmentEventHandler(fullDeps)
 
-  return { worker, logger, eventEmitter, processor, deps: fullDeps }
+  return {
+    handler,
+    logger,
+    eventEmitter: eventEmitter as EventEmitter & {
+      emittedEvents: VideoStatusEvent[]
+    },
+    processor,
+    deps: fullDeps,
+  }
 }
 
-describe('PrintWorker', () => {
-  describe('parseMessage', () => {
-    it('should parse valid JSON', () => {
-      const { worker } = createTestWorker()
-      const validEvent: SegmentEvent = {
+function createContext(correlationId?: string): MessageContext {
+  return {
+    metadata: correlationId
+      ? {
+          messageId: 'msg-123',
+          correlationId,
+          traceId: 'trace-123',
+          spanId: 'span-123',
+          source: 'test',
+          eventType: 'video.segment.print',
+          version: '1.0',
+          timestamp: new Date().toISOString(),
+          retryCount: 0,
+          maxRetries: 3,
+        }
+      : null,
+    messageId: 'sqs-msg-123',
+  }
+}
+
+describe('SegmentEventHandler', () => {
+  describe('parse', () => {
+    it('should parse valid payload', () => {
+      const { handler } = createTestHandler()
+      const validPayload: SegmentEvent = {
         detail: {
           videoId: 'video-123',
           presignedUrl: 'https://s3.amazonaws.com/bucket/key',
@@ -113,25 +112,31 @@ describe('PrintWorker', () => {
         },
       }
 
-      const result = worker.testParseMessage(JSON.stringify(validEvent))
+      const result = handler.parse(validPayload)
 
-      expect(result).toEqual(validEvent)
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data).toEqual(validPayload)
+      }
     })
 
-    it('should return null for invalid JSON', () => {
-      const { worker } = createTestWorker()
+    it('should fail for invalid payload', () => {
+      const { handler } = createTestHandler()
 
-      const result = worker.testParseMessage('not valid json {')
+      const result = handler.parse({ invalid: 'data' })
 
-      expect(result).toBeNull()
+      expect(result.success).toBe(false)
     })
 
-    it('should return null for empty string', () => {
-      const { worker } = createTestWorker()
+    it('should fail for payload without detail', () => {
+      const { handler } = createTestHandler()
 
-      const result = worker.testParseMessage('')
+      const result = handler.parse({
+        videoId: 'video-123',
+        presignedUrl: 'https://s3.amazonaws.com/bucket/key',
+      })
 
-      expect(result).toBeNull()
+      expect(result.success).toBe(false)
     })
   })
 
@@ -146,9 +151,10 @@ describe('PrintWorker', () => {
       ['Internal server error', false],
       ['Rate limit exceeded', false],
     ])('should return %s for error "%s"', (errorMessage, expected) => {
-      const { worker } = createTestWorker()
+      const { handler } = createTestHandler()
 
-      const result = worker.isNonRetryableError(new Error(errorMessage))
+      // Access private method via any
+      const result = (handler as unknown as { isNonRetryableError: (e: Error) => boolean }).isNonRetryableError(new Error(errorMessage))
 
       expect(result).toBe(expected)
     })
@@ -156,34 +162,35 @@ describe('PrintWorker', () => {
 
   describe('checkAndUpdateProgress', () => {
     it('should return true when segment is the last one', () => {
-      const { worker } = createTestWorker()
+      const { handler } = createTestHandler()
 
-      const result = worker.checkAndUpdateProgress('video-123', 10, 10)
+      // Access private method via any
+      const result = (handler as unknown as { checkAndUpdateProgress: (v: string, s: number, t: number, c: string) => boolean }).checkAndUpdateProgress('video-123', 10, 10, 'corr-123')
 
       expect(result).toBe(true)
     })
 
     it('should return false when segment is not the last one', () => {
-      const { worker } = createTestWorker()
+      const { handler } = createTestHandler()
 
-      const result = worker.checkAndUpdateProgress('video-123', 5, 10)
+      const result = (handler as unknown as { checkAndUpdateProgress: (v: string, s: number, t: number, c: string) => boolean }).checkAndUpdateProgress('video-123', 5, 10, 'corr-123')
 
       expect(result).toBe(false)
     })
 
     it('should return true for single segment video', () => {
-      const { worker } = createTestWorker()
+      const { handler } = createTestHandler()
 
-      const result = worker.checkAndUpdateProgress('video-123', 1, 1)
+      const result = (handler as unknown as { checkAndUpdateProgress: (v: string, s: number, t: number, c: string) => boolean }).checkAndUpdateProgress('video-123', 1, 1, 'corr-123')
 
       expect(result).toBe(true)
     })
   })
 
-  describe('handleMessage', () => {
+  describe('handle', () => {
     it('should process segment and extract frames', async () => {
       const processor = createMockProcessor()
-      const { worker } = createTestWorker({
+      const { handler } = createTestHandler({
         processorFactory: () => processor,
       })
 
@@ -198,7 +205,7 @@ describe('PrintWorker', () => {
         },
       }
 
-      await worker.testHandleMessage(event, { MessageId: 'msg-1' } as Message)
+      await handler.handle(event, createContext('corr-123'))
 
       expect(processor.setup).toHaveBeenCalled()
       expect(processor.extractFramesFromUrl).toHaveBeenCalledWith(
@@ -213,7 +220,7 @@ describe('PrintWorker', () => {
 
     it('should emit COMPLETED event when last segment is processed', async () => {
       const eventEmitter = createMockEventEmitter()
-      const { worker } = createTestWorker({ eventEmitter })
+      const { handler } = createTestHandler({ eventEmitter })
 
       const event: SegmentEvent = {
         detail: {
@@ -228,7 +235,7 @@ describe('PrintWorker', () => {
         },
       }
 
-      await worker.testHandleMessage(event, { MessageId: 'msg-1' } as Message)
+      await handler.handle(event, createContext('corr-123'))
 
       expect(eventEmitter.emittedEvents).toHaveLength(1)
       expect(eventEmitter.emittedEvents[0]).toMatchObject({
@@ -236,12 +243,13 @@ describe('PrintWorker', () => {
         status: 'COMPLETED',
         userEmail: 'user@example.com',
         videoName: 'my-video.mp4',
+        correlationId: 'corr-123',
       })
     })
 
     it('should NOT emit event for non-last segments', async () => {
       const eventEmitter = createMockEventEmitter()
-      const { worker } = createTestWorker({ eventEmitter })
+      const { handler } = createTestHandler({ eventEmitter })
 
       const event: SegmentEvent = {
         detail: {
@@ -254,7 +262,7 @@ describe('PrintWorker', () => {
         },
       }
 
-      await worker.testHandleMessage(event, { MessageId: 'msg-1' } as Message)
+      await handler.handle(event, createContext('corr-123'))
 
       expect(eventEmitter.emittedEvents).toHaveLength(0)
     })
@@ -265,7 +273,7 @@ describe('PrintWorker', () => {
         Promise.reject(new Error('FFmpeg failed')),
       )
 
-      const { worker } = createTestWorker({
+      const { handler } = createTestHandler({
         processorFactory: () => processor,
       })
 
@@ -280,21 +288,26 @@ describe('PrintWorker', () => {
         },
       }
 
-      await expect(
-        worker.testHandleMessage(event, { MessageId: 'msg-1' } as Message),
-      ).rejects.toThrow('FFmpeg failed')
+      await expect(handler.handle(event, createContext('corr-123'))).rejects.toThrow(
+        'FFmpeg failed',
+      )
 
       expect(processor.cleanup).toHaveBeenCalled()
     })
-  })
 
-  describe('onError', () => {
     it('should emit FAILED event for non-retryable errors', async () => {
       const eventEmitter = createMockEventEmitter()
-      const { worker } = createTestWorker({ eventEmitter })
+      const processor = createMockProcessor()
+      processor.extractFramesFromUrl = mock(() =>
+        Promise.reject(new Error('NoSuchKey: The specified key does not exist')),
+      )
 
-      const error = new Error('NoSuchKey: The specified key does not exist')
-      const payload: SegmentEvent = {
+      const { handler } = createTestHandler({
+        eventEmitter,
+        processorFactory: () => processor,
+      })
+
+      const event: SegmentEvent = {
         detail: {
           videoId: 'video-123',
           presignedUrl: 'https://s3.amazonaws.com/bucket/video.mp4',
@@ -307,26 +320,30 @@ describe('PrintWorker', () => {
         },
       }
 
-      await worker.testOnError(
-        error,
-        { MessageId: 'msg-1' } as Message,
-        payload,
-      )
+      await expect(handler.handle(event, createContext('corr-123'))).rejects.toThrow()
 
       expect(eventEmitter.emittedEvents).toHaveLength(1)
       expect(eventEmitter.emittedEvents[0]).toMatchObject({
         videoId: 'video-123',
         status: 'FAILED',
+        correlationId: 'corr-123',
         errorReason: 'NoSuchKey: The specified key does not exist',
       })
     })
 
-    it('should NOT emit event for retryable errors', async () => {
+    it('should NOT emit FAILED event for retryable errors', async () => {
       const eventEmitter = createMockEventEmitter()
-      const { worker } = createTestWorker({ eventEmitter })
+      const processor = createMockProcessor()
+      processor.extractFramesFromUrl = mock(() =>
+        Promise.reject(new Error('Connection timeout')),
+      )
 
-      const error = new Error('Connection timeout')
-      const payload: SegmentEvent = {
+      const { handler } = createTestHandler({
+        eventEmitter,
+        processorFactory: () => processor,
+      })
+
+      const event: SegmentEvent = {
         detail: {
           videoId: 'video-123',
           presignedUrl: 'https://s3.amazonaws.com/bucket/video.mp4',
@@ -337,28 +354,31 @@ describe('PrintWorker', () => {
         },
       }
 
-      await worker.testOnError(
-        error,
-        { MessageId: 'msg-1' } as Message,
-        payload,
-      )
+      await expect(handler.handle(event, createContext('corr-123'))).rejects.toThrow()
 
       expect(eventEmitter.emittedEvents).toHaveLength(0)
     })
 
-    it('should NOT emit event when payload is missing', async () => {
+    it('should use SQS messageId as correlationId when metadata is null', async () => {
       const eventEmitter = createMockEventEmitter()
-      const { worker } = createTestWorker({ eventEmitter })
+      const { handler } = createTestHandler({ eventEmitter })
 
-      const error = new Error('NoSuchKey: The specified key does not exist')
+      const event: SegmentEvent = {
+        detail: {
+          videoId: 'video-123',
+          presignedUrl: 'https://s3.amazonaws.com/bucket/video.mp4',
+          segmentNumber: 10,
+          totalSegments: 10,
+          startTime: 90,
+          endTime: 100,
+        },
+      }
 
-      await worker.testOnError(
-        error,
-        { MessageId: 'msg-1' } as Message,
-        undefined,
-      )
+      // Context without metadata (legacy format)
+      await handler.handle(event, createContext())
 
-      expect(eventEmitter.emittedEvents).toHaveLength(0)
+      expect(eventEmitter.emittedEvents).toHaveLength(1)
+      expect(eventEmitter.emittedEvents[0].correlationId).toBe('sqs-msg-123')
     })
   })
 })

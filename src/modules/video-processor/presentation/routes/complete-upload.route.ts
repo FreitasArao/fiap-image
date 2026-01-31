@@ -6,15 +6,16 @@ import { StatusMap, t } from 'elysia'
 
 export const completeUploadRoute = BaseElysia.create({ prefix: '' }).post(
   '/:id/complete',
-  async ({ params, logger, set }) => {
+  async ({ params, logger, set, tracingContext }) => {
     const { id: videoId } = params
+    const { correlationId, traceId } = tracingContext
 
     const useCase = new CompleteUploadUseCase(
       new VideoRepositoryImpl(logger),
       new UploadVideoParts(logger),
     )
 
-    const result = await useCase.execute({ videoId })
+    const result = await useCase.execute({ videoId, correlationId, traceId })
 
     if (result.isFailure) {
       set.status = StatusMap['Bad Request']

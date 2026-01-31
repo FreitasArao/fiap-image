@@ -5,89 +5,153 @@ import {
   type SendMessageBatchRequestEntry,
 } from '@aws-sdk/client-sqs'
 import { AbstractQueuePublisher } from '@core/abstractions/messaging/queue-publisher.abstract'
-import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 import { Result } from '@core/domain/result'
+import {
+  EnvelopeFactory,
+  defaultEnvelopeFactory,
+  type PublishOptions,
+  type TracingProvider,
+} from '@core/messaging'
 
-export abstract class AbstractSQSPublisher<
-  TMessage,
-> extends AbstractQueuePublisher<TMessage> {
+export interface SQSPublisherConfig {
+  queueUrl: string
+  source?: string
+  region?: string
+}
+
+export abstract class AbstractSQSPublisher<TPayload> extends AbstractQueuePublisher<TPayload> {
+  protected readonly queueUrl: string
+  private readonly sqsClient: SQSClient
+  private readonly envelopeFactory: EnvelopeFactory
+  private readonly source: string
+
   constructor(
     protected readonly logger: AbstractLoggerService,
-    protected readonly sqsClient: SQSClient,
-    protected readonly queueUrl: string,
+    config: SQSPublisherConfig,
+    envelopeFactory?: EnvelopeFactory,
+    sqsClient?: SQSClient,
   ) {
     super()
+    this.queueUrl = config.queueUrl
+    this.source = config.source ?? 'fiapx.video'
+    this.sqsClient =
+      sqsClient ??
+      new SQSClient({
+        region: config.region ?? process.env.AWS_REGION ?? 'us-east-1',
+        endpoint: process.env.AWS_ENDPOINT_URL,
+      })
+    this.envelopeFactory = envelopeFactory ?? defaultEnvelopeFactory
   }
 
-  protected abstract serializeMessage(message: TMessage): string
+  async publish(
+    payload: TPayload,
+    options: PublishOptions,
+  ): Promise<Result<void, Error>> {
+    if (!options.correlationId) {
+      return Result.fail(new Error('correlationId is required'))
+    }
 
-  async publish(message: TMessage): Promise<Result<void, Error>> {
     try {
-      const body = this.serializeMessage(message)
-      const command = new SendMessageCommand({
-        QueueUrl: this.queueUrl,
-        MessageBody: body,
+      const envelope = this.envelopeFactory.createEnvelope(payload, {
+        correlationId: options.correlationId,
+        eventType: options.eventType,
+        source: options.source ?? this.source,
+        traceId: options.traceId,
+        spanId: options.spanId,
       })
 
-      await this.sqsClient.send(command)
-      return Result.ok(undefined)
-    } catch (error) {
-      this.logger.error('Failed to publish message to SQS', {
-        error,
+      await this.sqsClient.send(
+        new SendMessageCommand({
+          QueueUrl: this.queueUrl,
+          MessageBody: JSON.stringify(envelope),
+        }),
+      )
+
+      this.logger.log('Message published', {
+        messageId: envelope.metadata.messageId,
+        correlationId: envelope.metadata.correlationId,
+        traceId: envelope.metadata.traceId,
+        eventType: options.eventType,
         queue: this.maskQueueUrl(),
       })
-      return Result.fail(
-        error instanceof Error ? error : new Error(String(error)),
-      )
+
+      return Result.ok(undefined)
+    } catch (error) {
+      this.logger.error('Failed to publish message', {
+        error,
+        correlationId: options.correlationId,
+        queue: this.maskQueueUrl(),
+      })
+      return Result.fail(error instanceof Error ? error : new Error(String(error)))
     }
   }
 
-  async publishBatch(messages: TMessage[]): Promise<Result<void, Error>> {
-    try {
-      if (messages.length === 0) return Result.ok(undefined)
+  async publishBatch(
+    payloads: TPayload[],
+    options: PublishOptions,
+  ): Promise<Result<void, Error>> {
+    if (!options.correlationId) {
+      return Result.fail(new Error('correlationId is required'))
+    }
 
-      // SQS batch limit is 10. We need to chunk if larger.
-      const chunks = this.chunkArray(messages, 10)
+    if (payloads.length === 0) {
+      return Result.ok(undefined)
+    }
+
+    try {
+      const chunks = this.chunkArray(payloads, 10)
 
       for (const chunk of chunks) {
-        const entries: SendMessageBatchRequestEntry[] = chunk.map(
-          (msg, index) => ({
-            Id: index.toString(), // ID within batch
-            MessageBody: this.serializeMessage(msg),
+        const entries: SendMessageBatchRequestEntry[] = chunk.map((payload, index) => {
+          const envelope = this.envelopeFactory.createEnvelope(payload, {
+            correlationId: options.correlationId,
+            eventType: options.eventType,
+            source: options.source ?? this.source,
+            traceId: options.traceId,
+            spanId: options.spanId,
+          })
+
+          return {
+            Id: `${index}-${envelope.metadata.messageId}`,
+            MessageBody: JSON.stringify(envelope),
+          }
+        })
+
+        const response = await this.sqsClient.send(
+          new SendMessageBatchCommand({
+            QueueUrl: this.queueUrl,
+            Entries: entries,
           }),
         )
 
-        const command = new SendMessageBatchCommand({
-          QueueUrl: this.queueUrl,
-          Entries: entries,
-        })
-
-        const response = await this.sqsClient.send(command)
-
         if (response.Failed && response.Failed.length > 0) {
-          this.logger.error('Some messages failed to publish in batch', {
+          this.logger.error('Batch publish partial failure', {
+            correlationId: options.correlationId,
             failedCount: response.Failed.length,
             failures: response.Failed,
           })
-          // Partial failure scenario.
-          // For now, we return failure if ANY fail.
           return Result.fail(
-            new Error(
-              `Failed to publish ${response.Failed.length} messages in batch`,
-            ),
+            new Error(`Failed to publish ${response.Failed.length} messages`),
           )
         }
       }
 
-      return Result.ok(undefined)
-    } catch (error) {
-      this.logger.error('Failed to publish batch messages to SQS', {
-        error,
+      this.logger.log('Batch published', {
+        correlationId: options.correlationId,
+        eventType: options.eventType,
+        count: payloads.length,
         queue: this.maskQueueUrl(),
       })
-      return Result.fail(
-        error instanceof Error ? error : new Error(String(error)),
-      )
+
+      return Result.ok(undefined)
+    } catch (error) {
+      this.logger.error('Failed to publish batch', {
+        error,
+        correlationId: options.correlationId,
+        queue: this.maskQueueUrl(),
+      })
+      return Result.fail(error instanceof Error ? error : new Error(String(error)))
     }
   }
 
@@ -99,3 +163,16 @@ export abstract class AbstractSQSPublisher<
     return chunks
   }
 }
+
+export function createSQSPublisher<TPayload>(
+  config: SQSPublisherConfig,
+  logger: AbstractLoggerService,
+  tracingProvider?: TracingProvider,
+): SQSPublisher<TPayload> {
+  const envelopeFactory = tracingProvider
+    ? new EnvelopeFactory(tracingProvider)
+    : undefined
+  return new SQSPublisher<TPayload>(logger, config, envelopeFactory)
+}
+
+class SQSPublisher<TPayload> extends AbstractSQSPublisher<TPayload> {}

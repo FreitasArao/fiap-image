@@ -5,81 +5,119 @@ import {
   SendMessageCommand,
   SendMessageBatchCommand,
 } from '@aws-sdk/client-sqs'
-import { AbstractSQSPublisher } from '../abstract-sqs-publisher'
-import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import { createSQSPublisher } from '../abstract-sqs-publisher'
+import { TracingProviderStub } from '@core/messaging/__tests__/tracing-provider.stub'
+import { EnvelopeFactory } from '@core/messaging'
+import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 
 const sqsMock = mockClient(SQSClient)
 
-class TestPublisher extends AbstractSQSPublisher<{ id: string }> {
-  protected serializeMessage(message: { id: string }): string {
-    return JSON.stringify(message)
-  }
-}
-
 describe('AbstractSQSPublisher', () => {
   let logger: AbstractLoggerService
-  let publisher: TestPublisher
 
   beforeEach(() => {
     sqsMock.reset()
-
     logger = {
       log: mock(),
       error: mock(),
     } as unknown as AbstractLoggerService
-
-    publisher = new TestPublisher(
-      logger,
-      new SQSClient({ region: 'us-east-1' }),
-      'http://queue.url',
-    )
   })
 
   afterEach(() => {
     sqsMock.reset()
   })
 
-  it('should publish message successfully', async () => {
+  it('should publish message with envelope successfully', async () => {
     sqsMock.on(SendMessageCommand).resolves({
       MessageId: 'msg-id-123',
     })
 
-    const result = await publisher.publish({ id: 'msg-1' })
+    const publisher = createSQSPublisher<{ id: string }>(
+      { queueUrl: 'http://queue.url', source: 'test-source' },
+      logger,
+    )
+
+    const result = await publisher.publish(
+      { id: 'msg-1' },
+      { eventType: 'test.event', correlationId: 'corr-123' },
+    )
 
     expect(result.isSuccess).toBe(true)
 
     const calls = sqsMock.commandCalls(SendMessageCommand)
     expect(calls.length).toBe(1)
-    expect(calls[0].args[0].input).toEqual({
-      QueueUrl: 'http://queue.url',
-      MessageBody: '{"id":"msg-1"}',
-    })
+
+    const body = JSON.parse(calls[0].args[0].input.MessageBody as string)
+    expect(body.metadata).toBeDefined()
+    expect(body.metadata.correlationId).toBe('corr-123')
+    expect(body.metadata.eventType).toBe('test.event')
+    expect(body.metadata.source).toBe('test-source')
+    expect(body.payload).toEqual({ id: 'msg-1' })
   })
 
-  it('should return failure when publish fails', async () => {
-    sqsMock.on(SendMessageCommand).rejects(new Error('SQS unavailable'))
+  it('should fail when correlationId is missing', async () => {
+    const publisher = createSQSPublisher<{ id: string }>(
+      { queueUrl: 'http://queue.url' },
+      logger,
+    )
 
-    const result = await publisher.publish({ id: 'msg-1' })
+    const result = await publisher.publish(
+      { id: 'msg-1' },
+      { eventType: 'test.event', correlationId: '' },
+    )
 
     expect(result.isFailure).toBe(true)
-    expect(result.error?.message).toBe('SQS unavailable')
+    expect(result.error?.message).toContain('correlationId is required')
   })
 
-  it('should publish batch messages successfully', async () => {
+  it('should use traceId/spanId from TracingProvider', async () => {
+    sqsMock.on(SendMessageCommand).resolves({})
+
+    const tracingProvider = TracingProviderStub.withContext(
+      'trace-from-provider',
+      'span-from-provider',
+    )
+
+    const publisher = createSQSPublisher<{ id: string }>(
+      { queueUrl: 'http://queue.url' },
+      logger,
+      tracingProvider,
+    )
+
+    await publisher.publish(
+      { id: 'msg-1' },
+      { eventType: 'test.event', correlationId: 'corr-123' },
+    )
+
+    const calls = sqsMock.commandCalls(SendMessageCommand)
+    const body = JSON.parse(calls[0].args[0].input.MessageBody as string)
+
+    expect(body.metadata.traceId).toBe('trace-from-provider')
+    expect(body.metadata.spanId).toBe('span-from-provider')
+  })
+
+  it('should publish batch messages with envelopes', async () => {
     sqsMock.on(SendMessageBatchCommand).resolves({
-      Successful: [{ Id: '0', MessageId: 'msg-0', MD5OfMessageBody: 'md5' }],
+      Successful: [{ Id: '0', MessageId: 'msg-0' }],
       Failed: [],
     })
 
-    const messages = [{ id: 'msg-1' }, { id: 'msg-2' }, { id: 'msg-3' }]
-    const result = await publisher.publishBatch(messages)
+    const publisher = createSQSPublisher<{ id: string }>(
+      { queueUrl: 'http://queue.url' },
+      logger,
+    )
+
+    const messages = [{ id: 'msg-1' }, { id: 'msg-2' }]
+    const result = await publisher.publishBatch(messages, {
+      eventType: 'test.batch.event',
+      correlationId: 'batch-corr-123',
+    })
 
     expect(result.isSuccess).toBe(true)
 
     const calls = sqsMock.commandCalls(SendMessageBatchCommand)
     expect(calls.length).toBe(1)
-    expect(calls[0].args[0].input.QueueUrl).toBe('http://queue.url')
-    expect(calls[0].args[0].input.Entries?.length).toBe(3)
+    expect(calls[0].args[0].input.Entries?.length).toBe(2)
   })
 
   it('should chunk batch messages when exceeding 10', async () => {
@@ -88,9 +126,16 @@ describe('AbstractSQSPublisher', () => {
       Failed: [],
     })
 
-    // Create 15 messages (should be split into 2 batches: 10 + 5)
+    const publisher = createSQSPublisher<{ id: string }>(
+      { queueUrl: 'http://queue.url' },
+      logger,
+    )
+
     const messages = Array.from({ length: 15 }, (_, i) => ({ id: `msg-${i}` }))
-    const result = await publisher.publishBatch(messages)
+    const result = await publisher.publishBatch(messages, {
+      eventType: 'test.event',
+      correlationId: 'corr-123',
+    })
 
     expect(result.isSuccess).toBe(true)
 
@@ -103,24 +148,35 @@ describe('AbstractSQSPublisher', () => {
   it('should return failure when batch has failed messages', async () => {
     sqsMock.on(SendMessageBatchCommand).resolves({
       Successful: [],
-      Failed: [
-        { Id: '0', SenderFault: true, Code: 'Error', Message: 'Failed' },
-      ],
+      Failed: [{ Id: '0', SenderFault: true, Code: 'Error', Message: 'Failed' }],
     })
 
-    const result = await publisher.publishBatch([{ id: 'msg-1' }])
+    const publisher = createSQSPublisher<{ id: string }>(
+      { queueUrl: 'http://queue.url' },
+      logger,
+    )
+
+    const result = await publisher.publishBatch(
+      [{ id: 'msg-1' }],
+      { eventType: 'test.event', correlationId: 'corr-123' },
+    )
 
     expect(result.isFailure).toBe(true)
     expect(result.error?.message).toContain('Failed to publish 1 messages')
   })
 
   it('should return success for empty batch', async () => {
-    const result = await publisher.publishBatch([])
+    const publisher = createSQSPublisher<{ id: string }>(
+      { queueUrl: 'http://queue.url' },
+      logger,
+    )
+
+    const result = await publisher.publishBatch(
+      [],
+      { eventType: 'test.event', correlationId: 'corr-123' },
+    )
 
     expect(result.isSuccess).toBe(true)
-
-    // Should not call SQS at all
-    const calls = sqsMock.commandCalls(SendMessageBatchCommand)
-    expect(calls.length).toBe(0)
+    expect(sqsMock.commandCalls(SendMessageBatchCommand).length).toBe(0)
   })
 })

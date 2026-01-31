@@ -44,13 +44,17 @@ export class CompleteMultipartHandler {
       })
   }
 
-  async handle(event: CompleteMultipartEvent): Promise<Result<void, Error>> {
+  async handle(
+    event: CompleteMultipartEvent,
+    correlationId?: string,
+  ): Promise<Result<void, Error>> {
     const { key } = event.detail.object
     const { name: bucket } = event.detail.bucket
 
     this.logger.log('Received S3 CompleteMultipartUpload event', {
       key,
       bucket,
+      correlationId,
     })
 
     const fullPath = `${bucket}/${key}`
@@ -60,6 +64,7 @@ export class CompleteMultipartHandler {
       this.logger.error('Invalid storage path format', {
         key,
         fullPath,
+        correlationId,
         event: JSON.stringify(event),
       })
       return Result.fail(new Error('Invalid storage path format'))
@@ -72,6 +77,7 @@ export class CompleteMultipartHandler {
       this.logger.error(`Video not found for reconciliation: ${videoId}`, {
         key,
         videoId,
+        correlationId,
         event: JSON.stringify(event),
       })
       return Result.fail(
@@ -86,6 +92,7 @@ export class CompleteMultipartHandler {
         'Video already uploaded/processing, skipping reconciliation',
         {
           videoId,
+          correlationId,
           event: JSON.stringify(event),
         },
       )
@@ -118,7 +125,10 @@ export class CompleteMultipartHandler {
       this.videoRepository.updateVideo(video),
     ])
 
-    this.logger.log('Video status updated to UPLOADED', { videoId })
+    this.logger.log('Video status updated to UPLOADED', {
+      videoId,
+      correlationId,
+    })
 
     // Emit UPLOADED event to trigger orchestrator-worker
     await this.eventBridgeClient.send(
@@ -131,6 +141,7 @@ export class CompleteMultipartHandler {
               videoId,
               videoPath: video.thirdPartyVideoIntegration?.key || videoId,
               status: 'UPLOADED',
+              correlationId: correlationId || '',
               timestamp: new Date().toISOString(),
             }),
           },
@@ -138,7 +149,10 @@ export class CompleteMultipartHandler {
       }),
     )
 
-    this.logger.log('Emitted UPLOADED event to EventBridge', { videoId })
+    this.logger.log('Emitted UPLOADED event to EventBridge', {
+      videoId,
+      correlationId,
+    })
 
     return Result.ok()
   }

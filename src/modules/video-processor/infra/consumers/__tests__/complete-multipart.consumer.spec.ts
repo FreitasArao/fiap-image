@@ -3,19 +3,13 @@ import { Result } from '@core/domain/result'
 import { PinoLoggerService } from '@core/libs/logging/pino-logger'
 import { context } from '@opentelemetry/api'
 import { InMemoryVideoRepository } from '@modules/video-processor/__tests__/factories/in-memory-video.repository'
-import { CompleteMultipartConsumer } from '@modules/video-processor/infra/consumers/complete-multipart.consumer'
+import {
+  CompleteMultipartMessageHandler,
+  createCompleteMultipartConsumer,
+} from '@modules/video-processor/infra/consumers/complete-multipart.consumer'
 import { CompleteMultipartHandler } from '@modules/video-processor/infra/consumers/complete-multipart-handler'
-import { CompleteMultipartEvent } from '@modules/video-processor/infra/consumers/complete-multipart-handler'
-
-class TestableCompleteMultipartConsumer extends CompleteMultipartConsumer {
-  public testParseMessage(body: string): CompleteMultipartEvent | null {
-    return this.parseMessage(body)
-  }
-
-  public async testHandleMessage(event: CompleteMultipartEvent): Promise<void> {
-    return this.handleMessage(event)
-  }
-}
+import type { CompleteMultipartEvent } from '@core/messaging/schemas'
+import type { MessageContext } from '@core/messaging'
 
 function createMockHandler(): CompleteMultipartHandler {
   const mockLogger = new PinoLoggerService(
@@ -31,81 +25,70 @@ function createMockHandler(): CompleteMultipartHandler {
   return handler
 }
 
-describe('CompleteMultipartConsumer', () => {
-  let consumer: TestableCompleteMultipartConsumer
-  let handler: CompleteMultipartHandler
+describe('CompleteMultipartMessageHandler', () => {
+  let messageHandler: CompleteMultipartMessageHandler
+  let innerHandler: CompleteMultipartHandler
   let handleSpy: ReturnType<typeof spyOn>
-  const originalEnv = process.env.COMPLETE_MULTIPART_QUEUE_URL
+  let logger: PinoLoggerService
 
   beforeEach(() => {
-    process.env.COMPLETE_MULTIPART_QUEUE_URL =
-      'https://sqs.us-east-1.amazonaws.com/123456789/test-queue'
-
-    handler = createMockHandler()
-
-    handleSpy = spyOn(handler, 'handle').mockResolvedValue(Result.ok())
-
-    consumer = new TestableCompleteMultipartConsumer(
-      new PinoLoggerService({ suppressConsole: true }, context.active()),
-      handler,
-    )
+    logger = new PinoLoggerService({ suppressConsole: true }, context.active())
+    innerHandler = createMockHandler()
+    handleSpy = spyOn(innerHandler, 'handle').mockResolvedValue(Result.ok())
+    messageHandler = new CompleteMultipartMessageHandler(logger, innerHandler)
   })
 
-  afterEach(() => {
-    process.env.COMPLETE_MULTIPART_QUEUE_URL = originalEnv
-  })
-
-  describe('parseMessage', () => {
-    it('should parse valid S3 event message', () => {
-      const validMessage = JSON.stringify({
+  describe('parse', () => {
+    it('should parse valid S3 event payload', () => {
+      const validPayload = {
         detail: {
           bucket: { name: 'test-bucket' },
           object: { key: 'bucket/video/video-id/video.mp4' },
           reason: 'CompleteMultipartUpload',
         },
-      })
+      }
 
-      const result = consumer.testParseMessage(validMessage)
+      const result = messageHandler.parse(validPayload)
 
-      expect(result).not.toBeNull()
-      expect(result?.detail.object.key).toBe('bucket/video/video-id/video.mp4')
-      expect(result?.detail.bucket.name).toBe('test-bucket')
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.detail.object.key).toBe(
+          'bucket/video/video-id/video.mp4',
+        )
+        expect(result.data.detail.bucket.name).toBe('test-bucket')
+      }
     })
 
-    it('should return null when detail field is missing', () => {
-      const invalidMessage = JSON.stringify({
+    it('should return error when detail field is missing', () => {
+      const invalidPayload = {
         bucket: { name: 'test-bucket' },
         object: { key: 'video-id/video.mp4' },
-      })
+      }
 
-      const result = consumer.testParseMessage(invalidMessage)
+      const result = messageHandler.parse(invalidPayload)
 
-      expect(result).toBeNull()
+      expect(result.success).toBe(false)
     })
 
-    it('should throw error for malformed JSON', () => {
-      const malformedMessage = 'not valid json {'
-
-      expect(() => consumer.testParseMessage(malformedMessage)).toThrow()
-    })
-
-    it('should parse message with minimal required fields', () => {
-      const minimalMessage = JSON.stringify({
+    it('should parse payload with minimal required fields', () => {
+      const minimalPayload = {
         detail: {
           bucket: { name: 'bucket' },
           object: { key: 'key' },
           reason: 'reason',
         },
-      })
+      }
 
-      const result = consumer.testParseMessage(minimalMessage)
+      const result = messageHandler.parse(minimalPayload)
 
-      expect(result).not.toBeNull()
-      expect(result?.detail.bucket.name).toBe('bucket')
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.detail.bucket.name).toBe('bucket')
+      }
     })
   })
 
-  describe('handleMessage', () => {
+  describe('handle', () => {
     const createS3Event = (key: string): CompleteMultipartEvent => ({
       detail: {
         bucket: { name: 'test-bucket' },
@@ -114,39 +97,103 @@ describe('CompleteMultipartConsumer', () => {
       },
     })
 
-    it('should call handler.handle with the event', async () => {
-      const event = createS3Event('bucket/video/video-123/video.mp4')
-
-      await consumer.testHandleMessage(event)
-
-      expect(handleSpy).toHaveBeenCalledTimes(1)
-      expect(handleSpy).toHaveBeenCalledWith(event)
+    const createContext = (correlationId?: string): MessageContext => ({
+      metadata: correlationId
+        ? {
+            messageId: 'msg-123',
+            correlationId,
+            traceId: 'trace-123',
+            spanId: 'span-123',
+            source: 'test',
+            eventType: 'video.multipart.complete',
+            version: '1.0',
+            timestamp: new Date().toISOString(),
+            retryCount: 0,
+            maxRetries: 3,
+          }
+        : null,
+      messageId: 'sqs-msg-123',
     })
 
-    it('should pass correct bucket and key to handler', async () => {
-      const event = createS3Event('test-bucket/video/abc-123/file.mp4')
+    it('should call innerHandler.handle with the event and correlationId', async () => {
+      const event = createS3Event('bucket/video/video-123/video.mp4')
+      const msgContext = createContext('corr-456')
 
-      await consumer.testHandleMessage(event)
+      await messageHandler.handle(event, msgContext)
 
-      const calledWith = handleSpy.mock.calls[0][0] as CompleteMultipartEvent
-      expect(calledWith.detail.bucket.name).toBe('test-bucket')
-      expect(calledWith.detail.object.key).toBe(
-        'test-bucket/video/abc-123/file.mp4',
-      )
+      expect(handleSpy).toHaveBeenCalledTimes(1)
+      expect(handleSpy).toHaveBeenCalledWith(event, 'corr-456')
+    })
+
+    it('should use SQS messageId as correlationId when metadata is null', async () => {
+      const event = createS3Event('bucket/video/video-123/video.mp4')
+      const msgContext = createContext() // no correlationId in metadata
+
+      await messageHandler.handle(event, msgContext)
+
+      expect(handleSpy).toHaveBeenCalledWith(event, 'sqs-msg-123')
     })
 
     it('should complete successfully when handler returns success', async () => {
       handleSpy.mockResolvedValue(Result.ok())
       const event = createS3Event('bucket/video/video-123/video.mp4')
+      const msgContext = createContext('corr-123')
 
-      await expect(consumer.testHandleMessage(event)).resolves.toBeUndefined()
+      await expect(
+        messageHandler.handle(event, msgContext),
+      ).resolves.toBeUndefined()
     })
 
     it('should complete successfully even when handler returns failure', async () => {
       handleSpy.mockResolvedValue(Result.fail(new Error('Handler error')))
       const event = createS3Event('bucket/video/video-123/video.mp4')
+      const msgContext = createContext('corr-123')
 
-      await expect(consumer.testHandleMessage(event)).resolves.toBeUndefined()
+      await expect(
+        messageHandler.handle(event, msgContext),
+      ).resolves.toBeUndefined()
     })
+  })
+})
+
+describe('createCompleteMultipartConsumer', () => {
+  const originalEnv = process.env.COMPLETE_MULTIPART_QUEUE_URL
+
+  beforeEach(() => {
+    process.env.COMPLETE_MULTIPART_QUEUE_URL =
+      'https://sqs.us-east-1.amazonaws.com/123456789/test-queue'
+  })
+
+  afterEach(() => {
+    process.env.COMPLETE_MULTIPART_QUEUE_URL = originalEnv
+  })
+
+  it('should create a consumer with the factory function', () => {
+    const logger = new PinoLoggerService(
+      { suppressConsole: true },
+      context.active(),
+    )
+    const handler = createMockHandler()
+
+    const consumer = createCompleteMultipartConsumer(logger, handler)
+
+    expect(consumer).toBeDefined()
+    expect(consumer.isRunning()).toBe(false)
+  })
+
+  it('should create a consumer with explicit queueUrl', () => {
+    const logger = new PinoLoggerService(
+      { suppressConsole: true },
+      context.active(),
+    )
+    const handler = createMockHandler()
+
+    const consumer = createCompleteMultipartConsumer(
+      logger,
+      handler,
+      'https://custom.queue.url',
+    )
+
+    expect(consumer).toBeDefined()
   })
 })

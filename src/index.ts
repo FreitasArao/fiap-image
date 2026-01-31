@@ -4,7 +4,7 @@ import cors from '@elysiajs/cors'
 import { docs } from '@modules/docs'
 import { healthRoutes } from '@modules/health/presentation/routes'
 import { logger } from '@modules/logging'
-import { telemetry } from '@modules/telemetry'
+import { telemetry, correlationMiddleware } from '@modules/telemetry'
 import { videoProcessorRoutes } from '@modules/video-processor/presentation/routes'
 import {
   startConsumers,
@@ -24,12 +24,20 @@ const app = BaseElysia.create()
   })
   .onStop(shutdown)
   .use(telemetry)
+  .use(correlationMiddleware)
   .use(docs)
   .use(
     cors({
       origin: '*',
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization'],
+      allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'x-correlation-id',
+        'traceparent',
+        'tracestate',
+      ],
+      exposeHeaders: ['x-correlation-id', 'traceparent'],
     }),
   )
   .use(videoProcessorRoutes)

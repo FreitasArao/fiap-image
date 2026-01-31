@@ -1,0 +1,68 @@
+# ===========================================
+# Dockerfile.workers.dockerignore
+# Contexto de build para WORKERS (Split/Print)
+# ===========================================
+
+# Dependências (instaladas no build)
+node_modules
+
+# Arquivos de build/config do Docker
+Dockerfile*
+docker-compose*
+.dockerignore*
+
+# Controle de versão
+.git
+.gitignore
+
+# Documentação
+README.md
+LICENSE
+docs/
+
+# IDEs e editores
+.vscode
+.idea
+.editorconfig
+.cursor
+
+# Ambiente local
+.env
+.env.*
+
+# Cobertura de testes
+coverage*
+**/__tests__/
+
+# Ferramentas não necessárias em runtime
+Makefile
+helm-charts
+biome.json
+bunfig.toml
+
+# ==========================================
+# MÓDULOS DA API - Workers não precisam
+# ==========================================
+src/modules/video-processor/application/
+src/modules/video-processor/domain/
+src/modules/video-processor/presentation/
+src/modules/video-processor/__tests__/
+src/modules/video-processor/infra/consumers/
+src/modules/video-processor/infra/repositories/
+src/modules/video-processor/infra/tables/
+src/modules/video-processor/infra/services/aws/
+# Mantém: src/modules/video-processor/infra/services/storage/
+src/modules/docs/
+src/modules/telemetry/
+src/modules/logging/
+src/modules/health/
+src/index.ts
+
+# ==========================================
+# WORKERS PRECISAM DE:
+# - workers/src/
+# - src/core/ (todo)
+# - src/modules/messaging/
+# - src/modules/video-processor/infra/services/storage/
+# - package.json, bun.lock, tsconfig.json
+# ==========================================

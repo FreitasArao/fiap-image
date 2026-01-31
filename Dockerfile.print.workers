@@ -10,20 +10,11 @@ WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install
 
-# ==========================================
-# CORE - Compartilhado por todos os workers
-# ==========================================
 COPY src/core/ ./src/core/
 
-# ==========================================
-# MODULES - Messaging + Storage
-# ==========================================
 COPY src/modules/messaging/ ./src/modules/messaging/
 COPY src/modules/video-processor/infra/ ./src/modules/video-processor/infra/
 
-# ==========================================
-# WORKERS
-# ==========================================
 COPY workers/src/ ./workers/src/
 COPY tsconfig.json ./
 
@@ -32,4 +23,4 @@ ENV AWS_ENDPOINT_URL=http://localstack:4566
 ENV S3_INPUT_BUCKET=fiapx-video-parts
 ENV S3_OUTPUT_BUCKET=fiapx-video-frames
 
-CMD ["bun", "run", "workers/src/split-worker.ts"]
+CMD ["bun", "run", "workers/src/print-worker.ts"]

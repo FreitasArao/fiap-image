@@ -34,12 +34,15 @@ const videoRepository = new VideoRepositoryImpl(logger)
  */
 export const webhookS3CompleteRoute = BaseElysia.create({ prefix: '' }).post(
   '/webhooks/s3/complete-multipart',
-  async ({ body, set }) => {
+  async ({ body, set, tracingContext }) => {
     const { bucket, key } = body
+    const { correlationId, traceId } = tracingContext
 
     logger.log('[WEBHOOK] Received S3 CompleteMultipartUpload event', {
       bucket,
       key,
+      correlationId,
+      traceId,
     })
 
     // Extract object_key from S3 key (remove filename if present, keep the path/id)
@@ -49,7 +52,9 @@ export const webhookS3CompleteRoute = BaseElysia.create({ prefix: '' }).post(
     // Find video by object_key (the path stored in S3)
     const result = await videoRepository.findByObjectKey(objectKey)
     if (result.isFailure || !result.value) {
-      logger.warn(`[WEBHOOK] Video not found for object_key: ${objectKey}`)
+      logger.warn(`[WEBHOOK] Video not found for object_key: ${objectKey}`, {
+        correlationId,
+      })
       set.status = 404
       return { error: 'Video not found', objectKey }
     }
@@ -66,6 +71,7 @@ export const webhookS3CompleteRoute = BaseElysia.create({ prefix: '' }).post(
       logger.log('[WEBHOOK] Video already processed, skipping', {
         videoId,
         status: video.status.value,
+        correlationId,
       })
       return {
         message: 'Already processed',
@@ -83,6 +89,7 @@ export const webhookS3CompleteRoute = BaseElysia.create({ prefix: '' }).post(
         videoId,
         currentStatus: video.status.value,
         error: transitionResult.error,
+        correlationId,
       })
       set.status = 400
       return { error: 'Failed to transition status', videoId }
@@ -96,7 +103,10 @@ export const webhookS3CompleteRoute = BaseElysia.create({ prefix: '' }).post(
       videoRepository.updateVideo(video),
     ])
 
-    logger.log('[WEBHOOK] Video status updated to UPLOADED', { videoId })
+    logger.log('[WEBHOOK] Video status updated to UPLOADED', {
+      videoId,
+      correlationId,
+    })
 
     // Emit UPLOADED event to trigger split-worker
     await eventBridgeClient.send(
@@ -109,6 +119,8 @@ export const webhookS3CompleteRoute = BaseElysia.create({ prefix: '' }).post(
               videoId,
               videoPath: video.thirdPartyVideoIntegration?.key || videoId,
               status: 'UPLOADED',
+              correlationId,
+              traceId,
               timestamp: new Date().toISOString(),
             }),
           },
@@ -116,7 +128,7 @@ export const webhookS3CompleteRoute = BaseElysia.create({ prefix: '' }).post(
       }),
     )
 
-    logger.log('[WEBHOOK] Emitted UPLOADED event', { videoId })
+    logger.log('[WEBHOOK] Emitted UPLOADED event', { videoId, correlationId })
 
     return {
       message: 'Video marked as uploaded and processing started',

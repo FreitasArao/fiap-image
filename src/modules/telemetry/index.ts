@@ -6,3 +6,8 @@ export const telemetry = opentelemetry({
   instrumentations: [],
   spanProcessors: [new BatchSpanProcessor(new OTLPTraceExporter())],
 })
+
+export {
+  correlationMiddleware,
+  type RequestTracingContext,
+} from './correlation-context'

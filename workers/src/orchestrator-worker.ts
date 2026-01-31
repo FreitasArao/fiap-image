@@ -1,77 +1,65 @@
-import { type Message } from '@aws-sdk/client-sqs'
-import { SQSClient, SendMessageBatchCommand } from '@aws-sdk/client-sqs'
 import {
   EventBridgeClient,
   PutEventsCommand,
 } from '@aws-sdk/client-eventbridge'
-import { AbstractSQSConsumer } from '@modules/messaging/sqs/abstract-sqs-consumer'
+import { context } from '@opentelemetry/api'
+import { PinoLoggerService } from '@core/libs/logging/pino-logger'
+import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 import {
   createStoragePathBuilder,
   type StoragePathBuilder,
 } from '@modules/video-processor/infra/services/storage'
-import { PinoLoggerService } from '@core/libs/logging/pino-logger'
-import { context } from '@opentelemetry/api'
+import {
+  createSQSConsumer,
+  createSQSPublisher,
+  type AbstractSQSPublisher,
+} from '@modules/messaging/sqs'
+import type { MessageHandler, MessageContext, ParseResult } from '@core/messaging'
+import {
+  VideoEventSchema,
+  VIDEO_EVENT_TYPES,
+  type VideoEvent,
+  type SegmentMessage,
+} from '@core/messaging/schemas'
 import { calculateTimeRanges, getTotalSegments } from './time-range'
 import { generatePresignedUrl } from './s3-presign.service'
 
-type VideoEvent = {
-  detail: {
-    videoId: string
-    videoPath?: string
-    duration?: number
-    userEmail?: string
-    videoName?: string
+export interface OrchestratorWorkerDeps {
+  logger: AbstractLoggerService
+  eventBridgeClient: EventBridgeClient
+  printQueuePublisher: AbstractSQSPublisher<SegmentMessage>
+  pathBuilder?: StoragePathBuilder
+  segmentDuration?: number
+}
+
+export class VideoEventHandler implements MessageHandler<VideoEvent> {
+  private readonly pathBuilder: StoragePathBuilder
+  private readonly segmentDuration: number
+
+  constructor(private readonly deps: OrchestratorWorkerDeps) {
+    this.pathBuilder = deps.pathBuilder ?? createStoragePathBuilder()
+    this.segmentDuration = deps.segmentDuration ?? parseInt(process.env.SEGMENT_DURATION ?? '10', 10)
   }
-}
 
-type SegmentMessage = {
-  videoId: string
-  presignedUrl: string
-  segmentNumber: number
-  totalSegments: number
-  startTime: number
-  endTime: number
-  userEmail?: string
-  videoName?: string
-}
-
-const logger = new PinoLoggerService(
-  {
-    suppressConsole: false,
-  },
-  context.active(),
-)
-
-const eventBridgeClient = new EventBridgeClient({
-  region: process.env.AWS_REGION || 'us-east-1',
-  endpoint: process.env.AWS_ENDPOINT_URL,
-})
-
-const sqsClient = new SQSClient({
-  region: process.env.AWS_REGION || 'us-east-1',
-  endpoint: process.env.AWS_ENDPOINT_URL,
-})
-
-export class OrchestratorWorker extends AbstractSQSConsumer<VideoEvent> {
-  private readonly pathBuilder: StoragePathBuilder = createStoragePathBuilder()
-  private segmentDuration = parseInt(process.env.SEGMENT_DURATION || '10', 10)
-  private printQueueUrl =
-    process.env.PRINT_QUEUE_URL ||
-    'http://localhost:4566/000000000000/print-queue'
-
-  protected parseMessage(body: string): VideoEvent | null {
-    try {
-      return JSON.parse(body)
-    } catch {
-      return null
+  parse(rawPayload: unknown): ParseResult<VideoEvent> {
+    const result = VideoEventSchema.safeParse(rawPayload)
+    if (!result.success) {
+      return { success: false, error: result.error.message }
     }
+    return { success: true, data: result.data }
   }
 
-  protected async handleMessage(
-    event: VideoEvent,
-    _message: Message,
-  ): Promise<void> {
+  async handle(event: VideoEvent, context: MessageContext): Promise<void> {
     const { videoId, videoPath, duration, userEmail, videoName } = event.detail
+    const correlationId = context.metadata?.correlationId ?? context.messageId ?? ''
+    const traceId = context.metadata?.traceId
+    const spanId = context.metadata?.spanId
+
+    this.deps.logger.log('[ORCHESTRATOR] Processing video', {
+      videoId,
+      correlationId,
+      traceId,
+    })
 
     if (!videoPath) {
       throw new Error(`Missing videoPath for video: ${videoId}`)
@@ -90,17 +78,16 @@ export class OrchestratorWorker extends AbstractSQSConsumer<VideoEvent> {
 
     const s3Key = inputStoragePath.key
 
-    this.logger.log(`[ORCHESTRATOR] Processing video: ${videoId}`)
-    this.logger.log(`[ORCHESTRATOR] Duration: ${duration}s`)
+    this.deps.logger.log(`[ORCHESTRATOR] Duration: ${duration}s`, { correlationId })
 
     const ranges = calculateTimeRanges(duration, this.segmentDuration)
     const totalSegments = getTotalSegments(duration, this.segmentDuration)
 
-    this.logger.log(`[ORCHESTRATOR] Calculated ${totalSegments} segments`)
+    this.deps.logger.log(`[ORCHESTRATOR] Calculated ${totalSegments} segments`, { correlationId })
 
     const presignedUrl = await generatePresignedUrl(inputBucket, s3Key, 7200)
 
-    this.logger.log(`[ORCHESTRATOR] Generated presigned URL`)
+    this.deps.logger.log('[ORCHESTRATOR] Generated presigned URL', { correlationId })
 
     const messages: SegmentMessage[] = ranges.map((range) => ({
       videoId,
@@ -113,53 +100,36 @@ export class OrchestratorWorker extends AbstractSQSConsumer<VideoEvent> {
       videoName,
     }))
 
-    await this.publishToQueue(messages)
-
-    await this.emitStatusEvent(videoId, 'PROCESSING', userEmail, videoName)
-
-    this.logger.log(
-      `[ORCHESTRATOR] Published ${messages.length} messages to print queue`,
+    const publishResult = await this.deps.printQueuePublisher.publishBatch(
+      messages,
+      {
+        eventType: VIDEO_EVENT_TYPES.SEGMENT_PRINT,
+        correlationId,
+        traceId,
+        spanId,
+      },
     )
-  }
 
-  private async publishToQueue(messages: SegmentMessage[]): Promise<void> {
-    const batchSize = 10
-    for (let i = 0; i < messages.length; i += batchSize) {
-      const batch = messages.slice(i, i + batchSize)
-
-      const entries = batch.map((msg, index) => ({
-        Id: `${msg.videoId}-${msg.segmentNumber}-${index}`,
-        MessageBody: JSON.stringify({ detail: msg }),
-      }))
-
-      await sqsClient.send(
-        new SendMessageBatchCommand({
-          QueueUrl: this.printQueueUrl,
-          Entries: entries,
-        }),
-      )
+    if (publishResult.isFailure) {
+      throw new Error(`Failed to publish segments: ${publishResult.error?.message}`)
     }
-  }
 
-  protected override async onError(
-    error: Error,
-    message: Message,
-    payload?: VideoEvent,
-  ): Promise<void> {
-    this.logger.error('[ORCHESTRATOR] Error processing video', {
-      error: error.message,
-      videoId: payload?.detail?.videoId,
-      messageId: message.MessageId,
-    })
+    await this.emitStatusEvent(videoId, 'PROCESSING', correlationId, userEmail, videoName)
+
+    this.deps.logger.log(
+      `[ORCHESTRATOR] Published ${messages.length} messages to print queue`,
+      { correlationId },
+    )
   }
 
   private async emitStatusEvent(
     videoId: string,
     status: string,
+    correlationId: string,
     userEmail?: string,
     videoName?: string,
   ): Promise<void> {
-    await eventBridgeClient.send(
+    await this.deps.eventBridgeClient.send(
       new PutEventsCommand({
         Entries: [
           {
@@ -168,22 +138,55 @@ export class OrchestratorWorker extends AbstractSQSConsumer<VideoEvent> {
             Detail: JSON.stringify({
               videoId,
               status,
-              userEmail: userEmail || 'user@example.com',
-              videoName: videoName || 'video',
+              correlationId,
+              userEmail: userEmail ?? 'user@example.com',
+              videoName: videoName ?? 'video',
               timestamp: new Date().toISOString(),
             }),
           },
         ],
       }),
     )
-    this.logger.log(`[ORCHESTRATOR] Emitted event: ${status}`)
+    this.deps.logger.log(`[ORCHESTRATOR] Emitted event: ${status}`, { correlationId })
   }
 }
 
-const queueUrl =
-  process.env.SQS_QUEUE_URL ||
-  'http://localhost:4566/000000000000/orchestrator-queue'
-const worker = new OrchestratorWorker({ queueUrl }, logger)
+if (import.meta.main) {
+  const logger = new PinoLoggerService(
+    { suppressConsole: false },
+    context.active(),
+  )
 
-logger.log('Starting Orchestrator Worker...')
-worker.start()
+  const eventBridgeClient = new EventBridgeClient({
+    region: process.env.AWS_REGION ?? 'us-east-1',
+    endpoint: process.env.AWS_ENDPOINT_URL,
+  })
+
+  const printQueueUrl =
+    process.env.PRINT_QUEUE_URL ??
+    'http://localhost:4566/000000000000/print-queue'
+
+  const printQueuePublisher = createSQSPublisher<SegmentMessage>(
+    { queueUrl: printQueueUrl, source: 'fiapx.orchestrator' },
+    logger,
+  )
+
+  const handler = new VideoEventHandler({
+    logger,
+    eventBridgeClient,
+    printQueuePublisher,
+  })
+
+  const queueUrl =
+    process.env.SQS_QUEUE_URL ??
+    'http://localhost:4566/000000000000/orchestrator-queue'
+
+  const consumer = createSQSConsumer<VideoEvent>(
+    { queueUrl },
+    logger,
+    handler,
+  )
+
+  logger.log('Starting Orchestrator Worker...')
+  consumer.start()
+}

@@ -1,14 +1,14 @@
 ---
 description: Padrão de Envelope para mensageria SQS com Distributed Tracing
 globs:
-  - src/shared/messaging/**/*.ts
-  - src/services/sqs/**/*.ts
+  - src/core/messaging/**/*.ts
+  - src/modules/messaging/sqs/**/*.ts
 alwaysApply: false
 ---
 
 # SQS Envelope Pattern
 
-Este projeto utiliza o padrão de Envelope para mensageria SQS com suporte a Distributed Tracing via Datadog.
+Este projeto utiliza o padrão de Envelope para mensageria SQS com suporte a Distributed Tracing.
 
 ## Estrutura do Envelope
 
@@ -23,8 +23,8 @@ interface MessageEnvelope<T> {
 interface EnvelopeMetadata {
   messageId: string;      // UUID gerado automaticamente
   correlationId: string;  // OBRIGATÓRIO - propagar do request original
-  traceId: string;        // Do Datadog ou UUID fallback
-  spanId: string;         // Do Datadog ou UUID fallback
+  traceId: string;        // Do UUID
+  spanId: string;         // Do UUID
   source: string;         // Nome do microserviço
   eventType: string;      // Ex: "notification.push.send"
   version: string;        // Versão do schema
@@ -59,7 +59,7 @@ await publisher.publish(payload, {
 Sempre use `createSQSPublisher` ao invés de instanciar `SQSPublisher` diretamente:
 
 ```typescript
-import { createSQSPublisher } from '../services/sqs/publish';
+import { createSQSPublisher } from '../modules/messaging/sqs/publish';
 
 const publisher = createSQSPublisher<MyPayload>({
   queueUrl: ENV.MY_QUEUE_URL,
@@ -71,7 +71,7 @@ const publisher = createSQSPublisher<MyPayload>({
 Handlers devem implementar a interface `MessageHandler<T>`:
 
 ```typescript
-import type { MessageHandler, MessageContext, ParseResult } from '../shared/messaging/message-handler';
+import type { MessageHandler, MessageContext, ParseResult } from '../core/messaging/message-handler';
 
 class MyHandler implements MessageHandler<MyPayload> {
   parse(rawPayload: unknown): ParseResult<MyPayload> {
@@ -88,7 +88,7 @@ class MyHandler implements MessageHandler<MyPayload> {
       message: 'Processing...',
       correlationId: context.metadata?.correlationId,
     });
-    
+
     // Propague para chamadas downstream
     await this.service.process(payload, context.metadata?.correlationId);
   }
@@ -154,13 +154,13 @@ const factory = new EnvelopeFactory(tracingProvider);
 
 | Arquivo | Propósito |
 |---------|-----------|
-| `shared/messaging/envelope.types.ts` | Interfaces TypeScript |
-| `shared/messaging/envelope.schema.ts` | Zod schemas |
-| `shared/messaging/envelope.factory.ts` | Criação de envelopes |
-| `shared/messaging/message-handler.ts` | Interface para handlers |
-| `shared/messaging/sqs-publisher.ts` | Publisher genérico |
-| `services/sqs/publish/sqs-publisher.ts` | Factory com deps reais |
-| `services/sqs/sqs-consumer.ts` | Consumer com envelope |
+| `core/messaging/envelope.types.ts` | Interfaces TypeScript |
+| `core/messaging/envelope.schema.ts` | Zod schemas |
+| `core/messaging/envelope.factory.ts` | Criação de envelopes |
+| `core/messaging/message-handler.ts` | Interface para handlers |
+| `core/messaging/sqs-publisher.ts` | Publisher genérico |
+| `modules/messaging/sqs/publish/sqs-publisher.ts` | Factory com deps reais |
+| `modules/messaging/sqs/sqs-consumer.ts` | Consumer com envelope |
 
 ## Event Types
 

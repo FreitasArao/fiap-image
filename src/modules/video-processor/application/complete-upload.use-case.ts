@@ -7,6 +7,8 @@ import {
 
 export type CompleteUploadParams = {
   videoId: string
+  correlationId?: string
+  traceId?: string
 }
 
 export type CompleteUploadResult = {
@@ -31,7 +33,7 @@ export class CompleteUploadUseCase {
   async execute(
     params: CompleteUploadParams,
   ): Promise<Result<CompleteUploadResult, Error>> {
-    const { videoId } = params
+    const { videoId, correlationId, traceId } = params
 
     const videoResult = await this.videoRepository.findById(videoId)
     if (videoResult.isFailure) return Result.fail(videoResult.error)
@@ -90,6 +92,8 @@ export class CompleteUploadUseCase {
               videoId,
               videoPath: video.thirdPartyVideoIntegration?.path || videoId,
               status: 'UPLOADED',
+              correlationId: correlationId || '',
+              traceId: traceId || '',
               timestamp: new Date().toISOString(),
             }),
           },

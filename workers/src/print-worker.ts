@@ -1,31 +1,24 @@
-import { type Message } from '@aws-sdk/client-sqs'
 import { EventBridgeClient } from '@aws-sdk/client-eventbridge'
 import { context } from '@opentelemetry/api'
 import { PinoLoggerService } from '@core/libs/logging/pino-logger'
-import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
-import { AbstractSQSConsumer } from '@modules/messaging'
+import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 import {
   StoragePathBuilder,
   createStoragePathBuilder,
 } from '@modules/video-processor/infra/services/storage'
+import { createSQSConsumer } from '@modules/messaging/sqs'
+import type {
+  MessageHandler,
+  MessageContext,
+  ParseResult,
+} from '@core/messaging'
+import { SegmentEventSchema, type SegmentEvent } from '@core/messaging/schemas'
 import { FFmpegProcessor } from './processors'
 import type { VideoProcessorService, EventEmitter } from './abstractions'
 import { EventBridgeEmitter } from './adapters'
 
-export type SegmentEvent = {
-  detail: {
-    videoId: string
-    presignedUrl: string
-    segmentNumber: number
-    totalSegments: number
-    startTime: number
-    endTime: number
-    userEmail?: string
-    videoName?: string
-  }
-}
-
 export interface PrintWorkerDeps {
+  logger: AbstractLoggerService
   eventEmitter: EventEmitter
   processorFactory: (videoId: string) => VideoProcessorService
   pathBuilder?: StoragePathBuilder
@@ -33,49 +26,28 @@ export interface PrintWorkerDeps {
   frameInterval?: number
 }
 
-interface PrintWorkerConfig {
-  queueUrl: string
-  region?: string
-  batchSize?: number
-  visibilityTimeout?: number
-  waitTimeSeconds?: number
-  pollingWaitTimeMs?: number
-}
-
-export class PrintWorker extends AbstractSQSConsumer<SegmentEvent> {
+export class SegmentEventHandler implements MessageHandler<SegmentEvent> {
   private readonly pathBuilder: StoragePathBuilder
   private readonly outputBucket: string
   private readonly frameInterval: number
-  private readonly eventEmitter: EventEmitter
-  private readonly processorFactory: (videoId: string) => VideoProcessorService
 
-  constructor(
-    config: PrintWorkerConfig,
-    logger: AbstractLoggerService,
-    deps: PrintWorkerDeps,
-  ) {
-    super(config, logger)
-    this.eventEmitter = deps.eventEmitter
-    this.processorFactory = deps.processorFactory
-    this.pathBuilder = deps.pathBuilder || createStoragePathBuilder()
+  constructor(private readonly deps: PrintWorkerDeps) {
+    this.pathBuilder = deps.pathBuilder ?? createStoragePathBuilder()
     this.outputBucket =
-      deps.outputBucket || process.env.S3_OUTPUT_BUCKET || 'fiapx-video-frames'
+      deps.outputBucket ?? process.env.S3_OUTPUT_BUCKET ?? 'fiapx-video-frames'
     this.frameInterval =
-      deps.frameInterval || parseInt(process.env.FRAME_INTERVAL || '1', 10)
+      deps.frameInterval ?? parseInt(process.env.FRAME_INTERVAL ?? '1', 10)
   }
 
-  protected parseMessage(body: string): SegmentEvent | null {
-    try {
-      return JSON.parse(body)
-    } catch {
-      return null
+  parse(rawPayload: unknown): ParseResult<SegmentEvent> {
+    const result = SegmentEventSchema.safeParse(rawPayload)
+    if (!result.success) {
+      return { success: false, error: result.error.message }
     }
+    return { success: true, data: result.data }
   }
 
-  protected async handleMessage(
-    event: SegmentEvent,
-    _message: Message,
-  ): Promise<void> {
+  async handle(event: SegmentEvent, context: MessageContext): Promise<void> {
     const {
       videoId,
       presignedUrl,
@@ -87,17 +59,29 @@ export class PrintWorker extends AbstractSQSConsumer<SegmentEvent> {
       videoName,
     } = event.detail
 
-    this.logger.log(
-      `[PRINT] Processing segment ${segmentNumber}/${totalSegments} for video: ${videoId}`,
-    )
-    this.logger.log(`[PRINT] Time range: ${startTime}s - ${endTime}s`)
+    const correlationId =
+      context.metadata?.correlationId ?? context.messageId ?? ''
+    const traceId = context.metadata?.traceId
 
-    const processor = this.processorFactory(`${videoId}-seg${segmentNumber}`)
+    this.deps.logger.log(
+      `[PRINT] Processing segment ${segmentNumber}/${totalSegments} for video: ${videoId}`,
+      { correlationId, traceId },
+    )
+    this.deps.logger.log(`[PRINT] Time range: ${startTime}s - ${endTime}s`, {
+      correlationId,
+    })
+
+    const processor = this.deps.processorFactory(
+      `${videoId}-seg${segmentNumber}`,
+    )
 
     try {
       await processor.setup()
 
-      this.logger.log(`[PRINT] Extracting frames from URL (streaming)...`)
+      this.deps.logger.log(
+        '[PRINT] Extracting frames from URL (streaming)...',
+        { correlationId },
+      )
 
       const { outputDir, count } = await processor.extractFramesFromUrl(
         presignedUrl,
@@ -106,9 +90,13 @@ export class PrintWorker extends AbstractSQSConsumer<SegmentEvent> {
         this.frameInterval,
       )
 
-      this.logger.log(`[PRINT] Extracted ${count} frames`)
+      this.deps.logger.log(`[PRINT] Extracted ${count} frames`, {
+        correlationId,
+      })
 
-      this.logger.log(`[PRINT] Uploading frames to S3...`)
+      this.deps.logger.log('[PRINT] Uploading frames to S3...', {
+        correlationId,
+      })
       const printsPrefix = this.pathBuilder
         .videoPrint(
           videoId,
@@ -127,6 +115,7 @@ export class PrintWorker extends AbstractSQSConsumer<SegmentEvent> {
         videoId,
         segmentNumber,
         totalSegments,
+        correlationId,
       )
 
       if (isLastSegment) {
@@ -135,60 +124,65 @@ export class PrintWorker extends AbstractSQSConsumer<SegmentEvent> {
         await this.emitStatusEvent(
           videoId,
           'COMPLETED',
+          correlationId,
           userEmail,
           videoName,
           downloadUrl,
         )
 
-        this.logger.log(`[PRINT] Video ${videoId} completed!`)
+        this.deps.logger.log(`[PRINT] Video ${videoId} completed!`, {
+          correlationId,
+        })
       }
 
-      this.logger.log(
+      this.deps.logger.log(
         `[PRINT] Segment ${segmentNumber}/${totalSegments} complete`,
+        { correlationId },
       )
+    } catch (error) {
+      this.deps.logger.error('[PRINT] Error processing segment', {
+        error: error instanceof Error ? error.message : String(error),
+        videoId,
+        segmentNumber,
+        correlationId,
+      })
+
+      const isNonRetryable = this.isNonRetryableError(
+        error instanceof Error ? error : new Error(String(error)),
+      )
+
+      if (isNonRetryable) {
+        await this.emitStatusEvent(
+          videoId,
+          'FAILED',
+          correlationId,
+          userEmail,
+          videoName,
+          undefined,
+          error instanceof Error ? error.message : String(error),
+        )
+      }
+
+      throw error
     } finally {
       await processor.cleanup()
     }
   }
 
-  checkAndUpdateProgress(
+  private checkAndUpdateProgress(
     videoId: string,
     segmentNumber: number,
     totalSegments: number,
+    correlationId: string,
   ): boolean {
-    this.logger.log(
+    this.deps.logger.log(
       `[PRINT] Segment ${segmentNumber}/${totalSegments} processed for video: ${videoId}`,
+      { correlationId },
     )
     return segmentNumber === totalSegments
   }
 
-  protected override async onError(
-    error: Error,
-    message: Message,
-    payload?: SegmentEvent,
-  ): Promise<void> {
-    this.logger.error('[PRINT] Error processing segment', {
-      error: error.message,
-      videoId: payload?.detail?.videoId,
-      segmentNumber: payload?.detail?.segmentNumber,
-      messageId: message.MessageId,
-    })
-
-    const isNonRetryable = this.isNonRetryableError(error)
-
-    if (isNonRetryable && payload?.detail?.videoId) {
-      await this.emitStatusEvent(
-        payload.detail.videoId,
-        'FAILED',
-        payload.detail.userEmail,
-        payload.detail.videoName,
-        undefined,
-        error.message,
-      )
-    }
-  }
-
-  isNonRetryableError(error: Error): boolean {
+  private isNonRetryableError(error: Error): boolean {
     const nonRetryablePatterns = [
       '404',
       'does not exist',
@@ -205,46 +199,52 @@ export class PrintWorker extends AbstractSQSConsumer<SegmentEvent> {
   private async emitStatusEvent(
     videoId: string,
     status: 'COMPLETED' | 'FAILED',
+    correlationId: string,
     userEmail?: string,
     videoName?: string,
     downloadUrl?: string,
     errorReason?: string,
   ): Promise<void> {
-    await this.eventEmitter.emitVideoStatus({
+    await this.deps.eventEmitter.emitVideoStatus({
       videoId,
       status,
+      correlationId,
       userEmail,
       videoName,
       downloadUrl,
       errorReason,
     })
-    this.logger.log(`[PRINT] Emitted event: ${status}`)
+    this.deps.logger.log(`[PRINT] Emitted event: ${status}`, { correlationId })
   }
 }
 
-// Bootstrap - only runs when executed directly
 if (import.meta.main) {
   const logger = new PinoLoggerService(
-    {
-      suppressConsole: false,
-    },
+    { suppressConsole: false },
     context.active(),
   )
 
   const eventBridgeClient = new EventBridgeClient({
-    region: process.env.AWS_REGION || 'us-east-1',
+    region: process.env.AWS_REGION ?? 'us-east-1',
     endpoint: process.env.AWS_ENDPOINT_URL,
   })
 
-  const queueUrl =
-    process.env.SQS_QUEUE_URL ||
-    'http://localhost:4566/000000000000/print-queue'
-
-  const worker = new PrintWorker({ queueUrl }, logger, {
+  const handler = new SegmentEventHandler({
+    logger,
     eventEmitter: new EventBridgeEmitter(eventBridgeClient),
     processorFactory: (videoId) => new FFmpegProcessor(videoId),
   })
 
+  const queueUrl =
+    process.env.SQS_QUEUE_URL ??
+    'http://localhost:4566/000000000000/print-queue'
+
+  const consumer = createSQSConsumer<SegmentEvent>(
+    { queueUrl },
+    logger,
+    handler,
+  )
+
   logger.log('Starting Print Worker...')
-  worker.start()
+  consumer.start()
 }
