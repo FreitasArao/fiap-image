@@ -2,7 +2,7 @@ services:
   orchestrator-worker:
     build:
       context: ..
-      dockerfile: Dockerfile.workers
+      dockerfile: Dockerfile.orchestrator.workers
     container_name: orchestrator-worker
     command: ["bun", "run", "workers/src/orchestrator-worker.ts"]
     environment:
@@ -22,7 +22,7 @@ services:
   print-worker:
     build:
       context: ..
-      dockerfile: Dockerfile.workers
+      dockerfile: Dockerfile.print.workers
     container_name: print-worker
     command: ["bun", "run", "workers/src/print-worker.ts"]
     environment:

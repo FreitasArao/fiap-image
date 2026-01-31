@@ -1,15 +1,33 @@
 import { BaseValueObject } from '@core/domain/value-object/base-value-object'
+import { DurationVO } from './duration.vo'
+
+export type VideoMetadataInput = {
+  totalSize: number
+  /** Duration in milliseconds */
+  durationMs: number
+  filename: string
+  extension: string
+}
 
 export type VideoMetadata = {
   totalSize: number
-  duration: number
+  duration: DurationVO
   filename: string
   extension: string
 }
 
 export class VideoMetadataVO extends BaseValueObject<VideoMetadata> {
-  static create(value: VideoMetadata): VideoMetadataVO {
-    return new VideoMetadataVO(value)
+  /**
+   * Creates a VideoMetadataVO from input with duration in milliseconds.
+   * @param input Video metadata with durationMs in milliseconds
+   */
+  static create(input: VideoMetadataInput): VideoMetadataVO {
+    return new VideoMetadataVO({
+      totalSize: input.totalSize,
+      duration: DurationVO.fromMilliseconds(input.durationMs),
+      filename: input.filename,
+      extension: input.extension,
+    })
   }
 
   get filename(): string {
@@ -22,5 +40,19 @@ export class VideoMetadataVO extends BaseValueObject<VideoMetadata> {
 
   get fullFilename(): string {
     return `${this.value.filename}.${this.value.extension}`
+  }
+
+  /**
+   * Duration in milliseconds (for persistence/events).
+   */
+  get durationMs(): number {
+    return this.value.duration.milliseconds
+  }
+
+  /**
+   * Duration in seconds (for FFmpeg and display).
+   */
+  get durationSeconds(): number {
+    return this.value.duration.seconds
   }
 }

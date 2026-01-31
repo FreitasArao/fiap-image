@@ -117,7 +117,7 @@ export const webhookS3CompleteRoute = BaseElysia.create({ prefix: '' }).post(
             DetailType: 'Video Status Changed',
             Detail: JSON.stringify({
               videoId,
-              videoPath: video.thirdPartyVideoIntegration?.key || videoId,
+              videoPath: video.thirdPartyVideoIntegration?.path || videoId,
               status: 'UPLOADED',
               correlationId,
               traceId,

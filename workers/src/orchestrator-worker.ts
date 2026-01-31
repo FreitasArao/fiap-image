@@ -14,7 +14,11 @@ import {
   createSQSPublisher,
   type AbstractSQSPublisher,
 } from '@modules/messaging/sqs'
-import type { MessageHandler, MessageContext, ParseResult } from '@core/messaging'
+import type {
+  MessageHandler,
+  MessageContext,
+  ParseResult,
+} from '@core/messaging'
 import {
   VideoEventSchema,
   VIDEO_EVENT_TYPES,
@@ -23,22 +27,28 @@ import {
 } from '@core/messaging/schemas'
 import { calculateTimeRanges, getTotalSegments } from './time-range'
 import { generatePresignedUrl } from './s3-presign.service'
+import { NonRetryableError } from '@core/errors/non-retryable.error'
 
 export interface OrchestratorWorkerDeps {
   logger: AbstractLoggerService
   eventBridgeClient: EventBridgeClient
   printQueuePublisher: AbstractSQSPublisher<SegmentMessage>
   pathBuilder?: StoragePathBuilder
-  segmentDuration?: number
+  /** Segment duration in milliseconds (default: 10000ms = 10s) */
+  segmentDurationMs?: number
 }
 
 export class VideoEventHandler implements MessageHandler<VideoEvent> {
   private readonly pathBuilder: StoragePathBuilder
-  private readonly segmentDuration: number
+  /** Segment duration in milliseconds */
+  private readonly segmentDurationMs: number
 
   constructor(private readonly deps: OrchestratorWorkerDeps) {
     this.pathBuilder = deps.pathBuilder ?? createStoragePathBuilder()
-    this.segmentDuration = deps.segmentDuration ?? parseInt(process.env.SEGMENT_DURATION ?? '10', 10)
+    // SEGMENT_DURATION env var is now in milliseconds (default: 10000ms = 10s)
+    this.segmentDurationMs =
+      deps.segmentDurationMs ??
+      parseInt(process.env.SEGMENT_DURATION ?? '10000', 10)
   }
 
   parse(rawPayload: unknown): ParseResult<VideoEvent> {
@@ -51,8 +61,13 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
 
   async handle(event: VideoEvent, context: MessageContext): Promise<void> {
     const { videoId, videoPath, duration, userEmail, videoName } = event.detail
-    const correlationId = context.metadata?.correlationId ?? context.messageId ?? ''
-    const traceId = context.metadata?.traceId
+
+    const correlationId =
+      context.metadata?.correlationId ??
+      event.detail.correlationId ??
+      context.messageId ??
+      ''
+    const traceId = context.metadata?.traceId ?? event.detail.traceId
     const spanId = context.metadata?.spanId
 
     this.deps.logger.log('[ORCHESTRATOR] Processing video', {
@@ -62,32 +77,42 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
     })
 
     if (!videoPath) {
-      throw new Error(`Missing videoPath for video: ${videoId}`)
+      throw new NonRetryableError(`Missing videoPath for video: ${videoId}`)
     }
 
     if (!duration || duration <= 0) {
-      throw new Error(`Missing or invalid duration for video: ${videoId}`)
+      throw new NonRetryableError(
+        `Missing or invalid duration for video: ${videoId}`,
+      )
     }
 
     const inputBucket = this.pathBuilder.bucket
     const inputStoragePath = this.pathBuilder.parse(videoPath)
 
     if (!inputStoragePath) {
-      throw new Error(`Invalid videoPath format: ${videoPath}`)
+      throw new NonRetryableError(`Invalid videoPath format: ${videoPath}`)
     }
 
     const s3Key = inputStoragePath.key
 
-    this.deps.logger.log(`[ORCHESTRATOR] Duration: ${duration}s`, { correlationId })
+    this.deps.logger.log(
+      `[ORCHESTRATOR] Duration: ${duration}ms (${duration / 1000}s)`,
+      { correlationId },
+    )
 
-    const ranges = calculateTimeRanges(duration, this.segmentDuration)
-    const totalSegments = getTotalSegments(duration, this.segmentDuration)
+    const ranges = calculateTimeRanges(duration, this.segmentDurationMs)
+    const totalSegments = getTotalSegments(duration, this.segmentDurationMs)
 
-    this.deps.logger.log(`[ORCHESTRATOR] Calculated ${totalSegments} segments`, { correlationId })
+    this.deps.logger.log(
+      `[ORCHESTRATOR] Calculated ${totalSegments} segments`,
+      { correlationId },
+    )
 
     const presignedUrl = await generatePresignedUrl(inputBucket, s3Key, 7200)
 
-    this.deps.logger.log('[ORCHESTRATOR] Generated presigned URL', { correlationId })
+    this.deps.logger.log('[ORCHESTRATOR] Generated presigned URL', {
+      correlationId,
+    })
 
     const messages: SegmentMessage[] = ranges.map((range) => ({
       videoId,
@@ -111,10 +136,18 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
     )
 
     if (publishResult.isFailure) {
-      throw new Error(`Failed to publish segments: ${publishResult.error?.message}`)
+      throw new Error(
+        `Failed to publish segments: ${publishResult.error?.message}`,
+      )
     }
 
-    await this.emitStatusEvent(videoId, 'PROCESSING', correlationId, userEmail, videoName)
+    await this.emitStatusEvent(
+      videoId,
+      'PROCESSING',
+      correlationId,
+      userEmail,
+      videoName,
+    )
 
     this.deps.logger.log(
       `[ORCHESTRATOR] Published ${messages.length} messages to print queue`,
@@ -147,7 +180,9 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
         ],
       }),
     )
-    this.deps.logger.log(`[ORCHESTRATOR] Emitted event: ${status}`, { correlationId })
+    this.deps.logger.log(`[ORCHESTRATOR] Emitted event: ${status}`, {
+      correlationId,
+    })
   }
 }
 
@@ -181,11 +216,7 @@ if (import.meta.main) {
     process.env.SQS_QUEUE_URL ??
     'http://localhost:4566/000000000000/orchestrator-queue'
 
-  const consumer = createSQSConsumer<VideoEvent>(
-    { queueUrl },
-    logger,
-    handler,
-  )
+  const consumer = createSQSConsumer<VideoEvent>({ queueUrl }, logger, handler)
 
   logger.log('Starting Orchestrator Worker...')
   consumer.start()

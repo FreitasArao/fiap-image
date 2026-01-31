@@ -12,7 +12,10 @@ import type {
   MessageContext,
   ParseResult,
 } from '@core/messaging'
-import { SegmentEventSchema, type SegmentEvent } from '@core/messaging/schemas'
+import {
+  SegmentMessageSchema,
+  type SegmentMessage,
+} from '@core/messaging/schemas'
 import { FFmpegProcessor } from './processors'
 import type { VideoProcessorService, EventEmitter } from './abstractions'
 import { EventBridgeEmitter } from './adapters'
@@ -26,7 +29,7 @@ export interface PrintWorkerDeps {
   frameInterval?: number
 }
 
-export class SegmentEventHandler implements MessageHandler<SegmentEvent> {
+export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
   private readonly pathBuilder: StoragePathBuilder
   private readonly outputBucket: string
   private readonly frameInterval: number
@@ -39,15 +42,18 @@ export class SegmentEventHandler implements MessageHandler<SegmentEvent> {
       deps.frameInterval ?? parseInt(process.env.FRAME_INTERVAL ?? '1', 10)
   }
 
-  parse(rawPayload: unknown): ParseResult<SegmentEvent> {
-    const result = SegmentEventSchema.safeParse(rawPayload)
+  parse(rawPayload: unknown): ParseResult<SegmentMessage> {
+    const result = SegmentMessageSchema.safeParse(rawPayload)
     if (!result.success) {
       return { success: false, error: result.error.message }
     }
     return { success: true, data: result.data }
   }
 
-  async handle(event: SegmentEvent, context: MessageContext): Promise<void> {
+  async handle(
+    message: SegmentMessage,
+    context: MessageContext,
+  ): Promise<void> {
     const {
       videoId,
       presignedUrl,
@@ -57,7 +63,7 @@ export class SegmentEventHandler implements MessageHandler<SegmentEvent> {
       endTime,
       userEmail,
       videoName,
-    } = event.detail
+    } = message
 
     const correlationId =
       context.metadata?.correlationId ?? context.messageId ?? ''
@@ -119,7 +125,11 @@ export class SegmentEventHandler implements MessageHandler<SegmentEvent> {
       )
 
       if (isLastSegment) {
-        const downloadUrl = `http://localhost:4566/${this.outputBucket}/${this.pathBuilder.videoPrint(videoId, '').key}`
+        const baseUrl =
+          process.env.AWS_PUBLIC_ENDPOINT ??
+          process.env.AWS_ENDPOINT_URL ??
+          'http://localhost:4566'
+        const downloadUrl = `${baseUrl}/${this.outputBucket}/${this.pathBuilder.videoPrint(videoId, '').key}`
 
         await this.emitStatusEvent(
           videoId,
@@ -239,7 +249,7 @@ if (import.meta.main) {
     process.env.SQS_QUEUE_URL ??
     'http://localhost:4566/000000000000/print-queue'
 
-  const consumer = createSQSConsumer<SegmentEvent>(
+  const consumer = createSQSConsumer<SegmentMessage>(
     { queueUrl },
     logger,
     handler,

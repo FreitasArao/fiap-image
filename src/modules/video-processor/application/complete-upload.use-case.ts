@@ -91,9 +91,11 @@ export class CompleteUploadUseCase {
             Detail: JSON.stringify({
               videoId,
               videoPath: video.thirdPartyVideoIntegration?.path || videoId,
+              duration: video.metadata.durationMs,
+              videoName: video.metadata.value.filename,
               status: 'UPLOADED',
-              correlationId: correlationId || '',
-              traceId: traceId || '',
+              correlationId: correlationId || crypto.randomUUID(),
+              traceId: traceId || crypto.randomUUID(),
               timestamp: new Date().toISOString(),
             }),
           },

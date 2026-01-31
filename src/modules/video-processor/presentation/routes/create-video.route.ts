@@ -58,7 +58,11 @@ export const createVideoRoute = BaseElysia.create({ prefix: '' }).post(
     },
     body: t.Object({
       totalSize: t.Number({ description: 'Total video size in bytes' }),
-      duration: t.Number({ description: 'Video duration in seconds' }),
+      duration: t.Number({
+        description:
+          'Video duration in milliseconds. Examples: 120000 = 2 minutes, 30000 = 30 seconds, 3600000 = 1 hour',
+        minimum: 1,
+      }),
       filename: t.String({ description: 'Video filename without extension' }),
       extension: t.String({
         description: 'Video extension (mp4, mov, avi, mkv, webm)',

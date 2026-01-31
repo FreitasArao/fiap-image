@@ -6,6 +6,8 @@ export const VideoEventDetailSchema = z.object({
   duration: z.number().positive().optional(),
   userEmail: z.string().email().optional(),
   videoName: z.string().optional(),
+  correlationId: z.string().optional(),
+  traceId: z.string().optional(),
 })
 
 export const VideoEventSchema = z.object({
@@ -63,7 +65,9 @@ export const CompleteMultipartEventSchema = z.object({
 export type CompleteMultipartEventDetail = z.infer<
   typeof CompleteMultipartEventDetailSchema
 >
-export type CompleteMultipartEvent = z.infer<typeof CompleteMultipartEventSchema>
+export type CompleteMultipartEvent = z.infer<
+  typeof CompleteMultipartEventSchema
+>
 
 export const VIDEO_EVENT_TYPES = {
   ORCHESTRATOR_TRIGGERED: 'video.orchestrator.triggered',

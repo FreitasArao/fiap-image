@@ -18,6 +18,7 @@ import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 
 export type CreateVideoUseCaseParams = {
   totalSize: number
+  /** Duration in milliseconds */
   duration: number
   filename: string
   extension: string
@@ -89,7 +90,7 @@ export class CreateVideoUseCase {
     const video = Video.create({
       userId: UniqueEntityID.create(),
       metadata: VideoMetadataVO.create({
-        duration: params.duration,
+        durationMs: params.duration,
         totalSize: params.totalSize,
         filename: params.filename,
         extension: extensionResult.value.value,

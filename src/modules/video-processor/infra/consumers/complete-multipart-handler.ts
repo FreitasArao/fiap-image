@@ -139,9 +139,11 @@ export class CompleteMultipartHandler {
             DetailType: 'Video Status Changed',
             Detail: JSON.stringify({
               videoId,
-              videoPath: video.thirdPartyVideoIntegration?.key || videoId,
+              videoPath: video.thirdPartyVideoIntegration?.path || videoId,
+              duration: video.metadata.durationMs,
+              videoName: video.metadata.value.filename,
               status: 'UPLOADED',
-              correlationId: correlationId || '',
+              correlationId: correlationId || crypto.randomUUID(),
               timestamp: new Date().toISOString(),
             }),
           },

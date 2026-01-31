@@ -13,7 +13,7 @@ export class VideoFactory {
       userId: UniqueEntityID.create(),
       metadata: VideoMetadataVO.create({
         totalSize: MegabytesValueObject.create(50).value,
-        duration: 60,
+        durationMs: 60000, // 60 seconds in milliseconds
         filename: 'test-video',
         extension: 'mp4',
       }),

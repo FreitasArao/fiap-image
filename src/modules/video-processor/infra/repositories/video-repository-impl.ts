@@ -151,8 +151,8 @@ export class VideoRepositoryImpl
       id: UniqueEntityID.create(videoRow.video_id),
       userId: UniqueEntityID.create(videoRow.user_id),
       metadata: VideoMetadataVO.create({
-        totalSize: videoRow.total_size,
-        duration: videoRow.duration,
+        totalSize: Number(videoRow.total_size),
+        durationMs: Number(videoRow.duration),
         filename: videoRow.filename || 'video',
         extension: videoRow.extension || 'mp4',
       }),
@@ -206,7 +206,7 @@ export class VideoRepositoryImpl
           user_id: video.userId.value,
           status: video.status.value,
           total_size: video.metadata.value.totalSize,
-          duration: video.metadata.value.duration,
+          duration: video.metadata.durationMs,
           filename: video.metadata.value.filename,
           extension: video.metadata.value.extension,
           parts_count: video.parts.length,
@@ -336,7 +336,7 @@ export class VideoRepositoryImpl
       table: 'video',
       data: {
         total_size: video.metadata.value.totalSize,
-        duration: video.metadata.value.duration,
+        duration: video.metadata.durationMs,
         parts_count: video.parts.length,
         status: video.status.value,
         updated_at: new Date(),

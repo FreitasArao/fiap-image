@@ -22,6 +22,30 @@ export type CompleteMultipartUploadParams = {
   parts: { partNumber: number; etag: string }[]
 }
 
+/**
+ * Converts a presigned URL from public endpoint to internal endpoint.
+ * Useful for server-side fetches when running inside Docker where
+ * "localhost" in the public URL doesn't reach LocalStack.
+ */
+export function toInternalUrl(presignedUrl: string): string {
+  const publicEndpoint =
+    process.env.AWS_PUBLIC_ENDPOINT || process.env.AWS_ENDPOINT
+  const internalEndpoint =
+    process.env.AWS_ENDPOINT_URL ||
+    process.env.AWS_ENDPOINT ||
+    'http://localhost:4566'
+  if (!publicEndpoint || publicEndpoint === internalEndpoint) {
+    return presignedUrl
+  }
+  try {
+    const publicOrigin = new URL(publicEndpoint).origin
+    const internalOrigin = new URL(internalEndpoint).origin
+    return presignedUrl.replace(publicOrigin, internalOrigin)
+  } catch {
+    return presignedUrl
+  }
+}
+
 export abstract class BaseS3Service {
   protected readonly s3: S3Client
   private readonly internalEndpoint: string | undefined

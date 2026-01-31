@@ -7,6 +7,7 @@ import {
   type MessageHandler,
   type EnvelopeMetadata,
 } from '@core/messaging'
+import { NonRetryableError } from '@core/errors/non-retryable.error'
 
 export interface SQSConsumerConfig {
   queueUrl: string
@@ -36,9 +37,11 @@ export abstract class AbstractSQSConsumer<TPayload> {
       queueUrl: config.queueUrl,
     }
 
+    const endpoint =
+      process.env.AWS_ENDPOINT_URL ?? process.env.AWS_ENDPOINT ?? undefined
     this.client = new SQSClient({
       region: this.config.region,
-      endpoint: process.env.AWS_ENDPOINT_URL,
+      ...(endpoint && { endpoint }),
     })
 
     this.consumer = Consumer.create({
@@ -54,7 +57,10 @@ export abstract class AbstractSQSConsumer<TPayload> {
     this.setupEventListeners()
   }
 
-  private parseBody(body: string): { payload: unknown; metadata: EnvelopeMetadata | null } {
+  private parseBody(body: string): {
+    payload: unknown
+    metadata: EnvelopeMetadata | null
+  } {
     const parsed = JSON.parse(body)
     const envelopeResult = GenericEnvelopeSchema.safeParse(parsed)
 
@@ -68,7 +74,7 @@ export abstract class AbstractSQSConsumer<TPayload> {
     return { payload: parsed, metadata: null }
   }
 
-  private async processMessage(message: Message): Promise<Message> {
+  private async processMessage(message: Message): Promise<Message | undefined> {
     const body = message.Body ?? '{}'
     let context: MessageContext | null = null
 
@@ -92,7 +98,15 @@ export abstract class AbstractSQSConsumer<TPayload> {
       const parseResult = this.handler.parse(payload)
 
       if (!parseResult.success) {
-        throw new Error(`Payload validation failed: ${parseResult.error}`)
+        this.logger.warn('Payload validation failed', {
+          error: parseResult.error,
+          messageId: message.MessageId,
+          correlationId: metadata?.correlationId,
+          traceId: metadata?.traceId,
+          eventType: metadata?.eventType,
+        })
+
+        throw new NonRetryableError(parseResult.error)
       }
 
       await this.handler.handle(parseResult.data, context)
@@ -104,8 +118,20 @@ export abstract class AbstractSQSConsumer<TPayload> {
 
       return message
     } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error)
+
+      if (NonRetryableError.isNonRetryable(error)) {
+        this.logger.warn('Non-retryable error, removing message from queue', {
+          error: errorMessage,
+          messageId: message.MessageId,
+          correlationId: context?.metadata?.correlationId,
+        })
+        return message
+      }
+
       this.logger.error('Error processing message', {
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage,
         messageId: message.MessageId,
         correlationId: context?.metadata?.correlationId,
       })

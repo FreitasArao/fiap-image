@@ -11,7 +11,7 @@ describe("CalculateVideoParts", () => {
   it("When a video metadadta size is lower than 5mb should return 1 part", () => {
     const videoMetadata = VideoMetadataVO.create({
       totalSize: MegabytesValueObject.create(4).value,
-      duration: 100000000,
+      durationMs: 100000000, // duration in milliseconds
       filename: 'test',
       extension: 'mp4',
     });
@@ -54,7 +54,7 @@ describe("CalculateVideoParts", () => {
     ({ size, expected }) => {
       const videoMetadata = VideoMetadataVO.create({
         totalSize: size.value,
-        duration: 100000000,
+        durationMs: 100000000, // duration in milliseconds
         filename: 'test',
         extension: 'mp4',
       });

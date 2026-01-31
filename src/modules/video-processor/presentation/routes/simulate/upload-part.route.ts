@@ -1,4 +1,5 @@
 import { BaseElysia } from '@core/libs/elysia'
+import { toInternalUrl } from '@modules/video-processor/infra/services/aws/s3/base-s3'
 import { StatusMap, t } from 'elysia'
 
 export const simulateUploadPartRoute = BaseElysia.create({ prefix: '' }).post(
@@ -7,9 +8,13 @@ export const simulateUploadPartRoute = BaseElysia.create({ prefix: '' }).post(
     const { file, presignedUrl, partNumber: partNumberStr } = body
     const partNumber = Number(partNumberStr)
 
-    logger.log('Simulating upload part', { partNumber, presignedUrl })
+    const uploadUrl = toInternalUrl(presignedUrl)
+    logger.log('Simulating upload part', {
+      partNumber,
+      presignedUrl: uploadUrl,
+    })
 
-    const response = await fetch(presignedUrl, {
+    const response = await fetch(uploadUrl, {
       method: 'PUT',
       body: file,
       headers: {
