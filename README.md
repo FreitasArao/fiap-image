@@ -33,25 +33,29 @@ Exemplo de resposta ao criar um vídeo:
 
 ### Simulando Evento de CompleteMultipartUpload (S3/EventBridge)
 
-Após completar o upload multipart no S3, o EventBridge chama o webhook da API via API Destination.
+Após completar o upload multipart no S3, o EventBridge enfileira a mensagem no SQS e a API consome.
 
-#### Fluxo Automático (Produção)
+#### Fluxo Automático
 
 ```
 S3 CompleteMultipartUpload
        ↓
    EventBridge
        ↓
-   API Destination (webhook)
+   multipart-complete-queue (SQS)
+       ↓
+   API Consumer (background)
        ↓
    API atualiza DB + emite evento UPLOADED
        ↓
-   EventBridge → split-queue → split-worker
+   EventBridge → orchestrator-queue → orchestrator-worker
 ```
 
-#### Via cURL (Teste Local)
+> **Nota**: Usamos SQS ao invés de API Destination para melhor resiliência e compatibilidade com LocalStack.
 
-Para simular o webhook diretamente:
+#### Via cURL (Teste Manual)
+
+Para simular o webhook diretamente (alternativa para testes):
 
 ```bash
 curl -X POST http://localhost:3002/videos/webhooks/s3/complete-multipart \
@@ -74,6 +78,41 @@ curl -X POST http://localhost:3002/videos/webhooks/s3/complete-multipart \
 ```
 
 > **Nota:** O `videoId` é extraído do primeiro segmento do `key` (antes da `/`). Use o `videoPath` retornado na criação do vídeo.
+
+#### Via EventBridge (Simular evento S3)
+
+Emitir evento como se o S3 tivesse completado o multipart upload:
+
+```bash
+aws --endpoint-url=http://localhost:4566 events put-events \
+  --entries '[
+    {
+      "Source": "aws.s3",
+      "DetailType": "Object Created",
+      "Detail": "{\"bucket\":{\"name\":\"fiapx-video-parts\"},\"object\":{\"key\":\"video/<VIDEO_ID>/file/video.mp4\"},\"reason\":\"CompleteMultipartUpload\"}"
+    }
+  ]'
+```
+
+#### Via AWS CLI (Complete Multipart Upload no S3)
+
+Se você fez upload das partes manualmente e tem o `uploadId`:
+
+```bash
+aws --endpoint-url=http://localhost:4566 s3api complete-multipart-upload \
+  --bucket fiapx-video-parts \
+  --key "video/<VIDEO_ID>/file/video.mp4" \
+  --upload-id "<UPLOAD_ID>" \
+  --multipart-upload '{"Parts":[{"PartNumber":1,"ETag":"\"<ETAG_PARTE_1>\""}]}'
+```
+
+#### Via API (Complete Upload)
+
+Completar o upload via API (requer que todas as partes estejam reportadas):
+
+```bash
+curl -X POST http://localhost:3002/videos/<VIDEO_ID>/complete
+```
 
 ## Workers (FFmpeg)
 
@@ -137,8 +176,9 @@ aws --endpoint-url=http://localhost:4566 s3 ls s3://fiapx-video-frames/test-vide
 
 | Fila | Descrição |
 |------|-----------|
-| `split-queue` | Trigger para split worker (UPLOADED → SPLITTING) |
-| `print-queue` | Trigger para print worker (SPLITTING → COMPLETED) |
+| `multipart-complete-queue` | Eventos S3 CompleteMultipartUpload → API Consumer |
+| `orchestrator-queue` | Trigger para orchestrator worker (UPLOADED → calcula ranges) |
+| `print-queue` | Trigger para print worker (extrai frames) |
 | `processing-dlq` | Dead letter queue para falhas |
 
 ### Templates de Email (SES)

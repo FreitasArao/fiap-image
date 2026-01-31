@@ -23,15 +23,16 @@
     // "noLib": true,                                    /* Disable including any library files, including the default lib.d.ts. */
     // "useDefineForClassFields": true,                  /* Emit ECMAScript-standard-compliant class fields. */
     // "moduleDetection": "auto",                        /* Control what method is used to detect module-format JS files. */
+    "baseUrl": ".",
     "paths": {
       "@core/*": ["./src/core/*"],
-      "@modules/*": ["./src/modules/*"]
+      "@modules/*": ["./src/modules/*"],
+      "@workers/*": ["./workers/src/*"]
     },
     /* Modules */
     "module": "ES2022" /* Specify what module code is generated. */,
     // "rootDir": "./",                                  /* Specify the root folder within your source files. */
-    "moduleResolution": "node" /* Specify how TypeScript looks up a file from a given module specifier. */,
-    // "baseUrl": "./",                                  /* Specify the base directory to resolve non-relative module names. */
+    "moduleResolution": "node", /* Specify how TypeScript looks up a file from a given module specifier. */
     // "paths": {},                                      /* Specify a set of entries that re-map imports to additional lookup locations. */
     // "rootDirs": [],                                   /* Allow multiple folders to be treated as one when resolving modules. */
     // "typeRoots": [],                                  /* Specify multiple folders that act like './node_modules/@types'. */

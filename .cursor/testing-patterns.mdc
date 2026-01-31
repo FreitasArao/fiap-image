@@ -1,0 +1,202 @@
+---
+globs: ["**/*.spec.ts"]
+alwaysApply: false
+---
+# Testing Patterns
+
+## Princípios FIRST
+
+Todos os testes devem seguir os princípios FIRST:
+
+- **Fast**: Testes devem executar rapidamente
+- **Independent**: Cada teste deve ser independente dos outros
+- **Repeatable**: Resultados consistentes em qualquer ambiente
+- **Self-validating**: Resultado claro de pass/fail
+- **Timely**: Escritos junto com o código de produção
+
+## Regras Obrigatórias
+
+### 1. NÃO usar jest.mock
+
+```typescript
+// ❌ ERRADO - Evitar jest.mock
+jest.mock('../../../utils/tracer', () => ({
+  default: { startSpan: jest.fn() }
+}));
+
+// ✅ CORRETO - Usar injeção de dependência
+const tracerStub = new TracerStub();
+const sut = new MyService(tracerStub);
+```
+
+### 2. Usar Injeção de Dependência
+
+O código de produção deve receber dependências via construtor:
+
+```typescript
+// Código de produção
+export class SQSPublisher<TPayload> {
+  constructor(
+    config: PublisherConfig,
+    private readonly logger: Logger,
+    private readonly dependencies: PublisherDependencies,
+  ) {}
+}
+
+// Teste
+const publisher = new SQSPublisher(
+  config,
+  loggerStub,
+  { sqsClient, envelopeFactory, tracer: tracerStub }
+);
+```
+
+### 3. Criar Test Doubles Simples
+
+Implementar stubs que seguem a interface necessária:
+
+```typescript
+// Stub para Tracer
+class TracerStub implements Tracer {
+  public spans: SpanStub[] = [];
+
+  startSpan(_name: string, _options?: unknown): SpanStub {
+    const span = new SpanStub();
+    this.spans.push(span);
+    return span;
+  }
+
+  getLastSpan(): SpanStub | undefined {
+    return this.spans[this.spans.length - 1];
+  }
+
+  reset(): void {
+    this.spans = [];
+  }
+}
+
+// Stub para Logger
+class LoggerStub {
+  public calls: LogCall[] = [];
+
+  info(args: Record<string, unknown>): void {
+    this.calls.push({ method: 'info', args });
+  }
+
+  error(args: Record<string, unknown>): void {
+    this.calls.push({ method: 'error', args });
+  }
+
+  getCallsBy(method: LogCall['method']): LogCall[] {
+    return this.calls.filter((c) => c.method === method);
+  }
+
+  reset(): void {
+    this.calls = [];
+  }
+}
+```
+
+### 4. Organizar Stubs em Diretório `doubles/`
+
+```
+src/
+└── services/
+    └── sqs/
+        └── __tests__/
+            ├── doubles/
+            │   ├── logger.stub.ts
+            │   ├── tracer.stub.ts
+            │   ├── handler.stub.ts
+            │   └── envelope.builder.ts
+            └── sqs-consumer.spec.ts
+```
+
+### 5. Usar Builders para Objetos Complexos
+
+```typescript
+class EnvelopeBuilder<T = unknown> {
+  private metadata: EnvelopeMetadata = { /* defaults */ };
+  private payload: T = {} as T;
+
+  withCorrelationId(id: string): this {
+    this.metadata.correlationId = id;
+    return this;
+  }
+
+  withPayload(payload: T): this {
+    this.payload = payload;
+    return this;
+  }
+
+  build(): MessageEnvelope<T> {
+    return { metadata: { ...this.metadata }, payload: this.payload };
+  }
+}
+```
+
+### 6. Estrutura de Teste
+
+```typescript
+describe('MyService', () => {
+  let sut: MyService;  // System Under Test
+  let loggerStub: LoggerStub;
+  let dependencyStub: DependencyStub;
+
+  beforeEach(() => {
+    loggerStub = new LoggerStub();
+    dependencyStub = new DependencyStub();
+    sut = new MyService(loggerStub, dependencyStub);
+  });
+
+  afterEach(() => {
+    loggerStub.reset();
+    dependencyStub.reset();
+  });
+
+  describe('methodName', () => {
+    it('should do expected behavior', async () => {
+      // Arrange
+      const input = { /* ... */ };
+      
+      // Act
+      const result = await sut.methodName(input);
+      
+      // Assert
+      expect(result).toEqual(expected);
+    });
+  });
+});
+```
+
+## Exceções Permitidas
+
+### Mocks de Infraestrutura Externa
+
+Para clientes AWS SDK, usar `aws-sdk-client-mock`:
+
+```typescript
+import { mockClient } from 'aws-sdk-client-mock';
+import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+
+const sqsMock = mockClient(SQSClient);
+
+beforeEach(() => {
+  sqsMock.reset();
+});
+
+it('should send message', async () => {
+  sqsMock.on(SendMessageCommand).resolves({ MessageId: 'msg-123' });
+  // ...
+});
+```
+
+## Checklist para Code Review
+
+- [ ] Não usa `jest.mock()`
+- [ ] Dependências injetadas via construtor
+- [ ] Stubs implementam interfaces explícitas
+- [ ] Cada teste é independente (usa beforeEach/afterEach)
+- [ ] Nomes descritivos: `it('should X when Y')`
+- [ ] Segue padrão Arrange-Act-Assert
+- [ ] Stubs têm método `reset()`

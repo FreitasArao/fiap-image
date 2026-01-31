@@ -15,14 +15,22 @@ const eventBridgeClient = new EventBridgeClient({
 const videoRepository = new VideoRepositoryImpl(logger)
 
 /**
- * Webhook endpoint para receber eventos do S3 via EventBridge API Destination.
- * Quando o S3 CompleteMultipartUpload acontece, o EventBridge chama este endpoint.
+ * Webhook endpoint para testes manuais de eventos S3 CompleteMultipartUpload.
  *
- * Fluxo:
+ * NOTA: Este endpoint é mantido para testes manuais e debugging.
+ * O fluxo principal de produção usa SQS Consumer (CompleteMultipartConsumer).
+ *
+ * Fluxo Principal (Produção):
  * 1. S3 CompleteMultipartUpload → EventBridge
- * 2. EventBridge API Destination → Este endpoint
- * 3. Este endpoint atualiza o DB e emite evento UPLOADED
- * 4. EventBridge (video-uploaded-rule) → split-queue → split-worker
+ * 2. EventBridge → multipart-complete-queue (SQS)
+ * 3. API Consumer (CompleteMultipartConsumer) processa a mensagem
+ * 4. Atualiza DB e emite evento UPLOADED
+ * 5. EventBridge → orchestrator-queue → orchestrator-worker
+ *
+ * Uso para testes manuais:
+ * curl -X POST http://localhost:3002/videos/webhooks/s3/complete-multipart \
+ *   -H "Content-Type: application/json" \
+ *   -d '{"bucket": "fiapx-video-parts", "key": "video/VIDEO-ID/file/video.mp4"}'
  */
 export const webhookS3CompleteRoute = BaseElysia.create({ prefix: '' }).post(
   '/webhooks/s3/complete-multipart',

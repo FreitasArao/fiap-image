@@ -151,40 +151,30 @@ services:
         echo "=== Configurando targets do EventBridge ==="
 
         # ============================================
-        # API DESTINATION para webhook S3 Complete
+        # FILA para eventos S3 CompleteMultipartUpload
         # ============================================
-        echo "=== Criando API Connection e Destination ==="
+        # Nota: API Destinations não funcionam no LocalStack Free
+        # Por isso usamos SQS como alternativa
 
-        # Criar Connection (autenticação básica dummy para LocalStack)
-        aws --endpoint-url=http://localstack:4566 events create-connection \
-          --name fiapx-api-connection \
-          --authorization-type API_KEY \
-          --auth-parameters '{"ApiKeyAuthParameters": {"ApiKeyName": "x-api-key", "ApiKeyValue": "localstack-dev"}}' || true
+        aws --endpoint-url=http://localstack:4566 sqs create-queue \
+          --queue-name multipart-complete-queue || true
 
-        # Criar API Destination
-        aws --endpoint-url=http://localstack:4566 events create-api-destination \
-          --name fiapx-s3-complete-webhook \
-          --connection-arn arn:aws:events:us-east-1:000000000000:connection/fiapx-api-connection \
-          --invocation-endpoint http://api:3010/videos/webhooks/s3/complete-multipart \
-          --http-method POST \
-          --invocation-rate-limit-per-second 10 || true
-
-        # Target: S3 CompleteMultipart -> API Webhook
+        # Target: S3 CompleteMultipart -> multipart-complete-queue
         aws --endpoint-url=http://localstack:4566 events put-targets \
           --rule multipart-complete-rule \
           --targets '[
             {
-              "Id": "api-webhook-target",
-              "Arn": "arn:aws:events:us-east-1:000000000000:api-destination/fiapx-s3-complete-webhook",
-              "InputTransformer": {
-                "InputPathsMap": {
-                  "bucket": "$.detail.bucket.name",
-                  "key": "$.detail.object.key"
-                },
-                "InputTemplate": "{\"bucket\": <bucket>, \"key\": <key>}"
-              }
+              "Id": "multipart-complete-queue-target",
+              "Arn": "arn:aws:sqs:us-east-1:000000000000:multipart-complete-queue"
             }
           ]'
+
+        # API Connection (necessária para API Destinations de notificação)
+        echo "=== Criando API Connection ==="
+        aws --endpoint-url=http://localstack:4566 events create-connection \
+          --name fiapx-api-connection \
+          --authorization-type API_KEY \
+          --auth-parameters '{"ApiKeyAuthParameters": {"ApiKeyName": "x-api-key", "ApiKeyValue": "localstack-dev"}}' || true
 
         # Target: Video UPLOADED -> orchestrator-queue
         aws --endpoint-url=http://localstack:4566 events put-targets \
@@ -200,7 +190,7 @@ services:
         aws --endpoint-url=http://localstack:4566 events create-api-destination \
           --name fiapx-notification-webhook \
           --connection-arn arn:aws:events:us-east-1:000000000000:connection/fiapx-api-connection \
-          --invocation-endpoint http://api:3010/videos/webhooks/notification \
+          --invocation-endpoint http://api:3002/videos/webhooks/notification \
           --http-method POST \
           --invocation-rate-limit-per-second 10 || true
 

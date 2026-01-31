@@ -60,12 +60,13 @@ sequenceDiagram
     end
 
     rect rgb(225, 245, 254)
-        Note over S3,SQSo: 5. EVENTO S3 → WEBHOOK
+        Note over S3,SQSo: 5. EVENTO S3 → SQS → API CONSUMER
         S3->>EB: Event: Object Created
-        EB->>API: POST /webhooks/s3/complete
+        EB->>SQSo: Enfileira (multipart-queue)
+        SQSo->>API: Poll (background consumer)
         API->>DB: UPDATE status = UPLOADED
         API->>EB: PutEvents (Status Changed: UPLOADED)
-        EB->>SQSo: Enfileira mensagem
+        EB->>SQSo: Enfileira (orchestrator-queue)
     end
 
     rect rgb(237, 231, 246)

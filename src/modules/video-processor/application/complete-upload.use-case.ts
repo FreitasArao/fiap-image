@@ -61,7 +61,7 @@ export class CompleteUploadUseCase {
       return Result.fail(new Error('No parts with ETags found'))
 
     const uploadId = video.thirdPartyVideoIntegration?.uploadId
-    const key = video.thirdPartyVideoIntegration?.path
+    const key = video.thirdPartyVideoIntegration?.key
     const isMissingUploadIdOrKey = !uploadId || !key
     if (isMissingUploadIdOrKey)
       return Result.fail(new Error('Missing upload ID or key'))

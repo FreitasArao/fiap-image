@@ -13,13 +13,13 @@ RUN bun install
 # ==========================================
 # CORE - Compartilhado por todos os workers
 # ==========================================
-COPY src/core/libs/logging/ ./src/core/libs/logging/
-COPY src/core/abstractions/messaging/ ./src/core/abstractions/messaging/
+COPY src/core/ ./src/core/
 
 # ==========================================
-# MODULES - Apenas Messaging (SQS)
+# MODULES - Messaging + Storage
 # ==========================================
-COPY src/modules/messaging/sqs/ ./src/modules/messaging/sqs/
+COPY src/modules/messaging/ ./src/modules/messaging/
+COPY src/modules/video-processor/infra/ ./src/modules/video-processor/infra/
 
 # ==========================================
 # WORKERS

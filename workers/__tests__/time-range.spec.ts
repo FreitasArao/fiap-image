@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { calculateTimeRanges, getTotalSegments } from '../src/time-range'
+import { calculateTimeRanges, getTotalSegments } from '@workers/time-range'
 
 describe('calculateTimeRanges', () => {
   it('should return empty array for zero duration', () => {
@@ -14,9 +14,7 @@ describe('calculateTimeRanges', () => {
 
   it('should return single range for duration less than segment', () => {
     const ranges = calculateTimeRanges(5, 10)
-    expect(ranges).toEqual([
-      { segmentNumber: 1, startTime: 0, endTime: 5 },
-    ])
+    expect(ranges).toEqual([{ segmentNumber: 1, startTime: 0, endTime: 5 }])
   })
 
   it('should return exact ranges for duration divisible by segment', () => {
@@ -49,7 +47,11 @@ describe('calculateTimeRanges', () => {
     const ranges = calculateTimeRanges(3600, 60)
     expect(ranges).toHaveLength(60)
     expect(ranges[0]).toEqual({ segmentNumber: 1, startTime: 0, endTime: 60 })
-    expect(ranges[59]).toEqual({ segmentNumber: 60, startTime: 3540, endTime: 3600 })
+    expect(ranges[59]).toEqual({
+      segmentNumber: 60,
+      startTime: 3540,
+      endTime: 3600,
+    })
   })
 })
 

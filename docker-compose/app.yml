@@ -12,6 +12,7 @@ services:
       - AWS_REGION=${AWS_REGION}
       - AWS_ENDPOINT=${AWS_ENDPOINT}
       - AWS_PUBLIC_ENDPOINT=${AWS_PUBLIC_ENDPOINT:-http://localhost:4566}
+      - COMPLETE_MULTIPART_QUEUE_URL=${COMPLETE_MULTIPART_QUEUE_URL:-http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/multipart-complete-queue}
     ports:
       - "3002:3010"
     volumes:

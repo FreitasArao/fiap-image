@@ -1,7 +1,7 @@
 @startuml HLD-Sequence
 !theme aws-orange
 
-title Processamento de Video - Pipeline Streaming com Fan-out\n(EventBridge + API Destination + SQS + KEDA + SES)
+title Processamento de Video - Pipeline Streaming com Fan-out\n(EventBridge + SQS + KEDA + SES)
 
 skinparam backgroundColor #FEFEFE
 skinparam sequenceArrowThickness 2
@@ -21,7 +21,7 @@ box "FIAPX API (Elysia)" #LightYellow
     participant "GET /upload-urls" as apiUrls
     participant "POST /parts/{n}" as apiParts
     participant "POST /complete" as apiComplete
-    participant "POST /webhooks/s3" as apiWebhook
+    participant "API Consumer" as apiConsumer
 end box
 
 box "AWS Storage" #Orange
@@ -31,10 +31,10 @@ end box
 
 box "AWS Events" #Pink
     participant "EventBridge" as eb
-    participant "API Dest\n(Webhook)" as apiDestHook
-    participant "API Dest\n(SES)" as apiDestSES
+    queue "SQS Multipart" as sqsMultipart
     queue "SQS Orchestrator" as sqsOrch
     queue "SQS Print" as sqsPrint
+    participant "API Dest\n(SES)" as apiDestSES
 end box
 
 box "Kubernetes (Bun Runtime)" #Gray
@@ -99,19 +99,20 @@ s3 --> apiComplete: 200 OK
 apiComplete --> user: 202 Accepted
 deactivate apiComplete
 
-== 5. Evento S3 -> Webhook ==
+== 5. Evento S3 -> SQS -> API Consumer ==
 
 s3 -> eb: Object Created\n(CompleteMultipartUpload)
 activate eb
-eb -> apiDestHook: Roteia evento
-apiDestHook -> apiWebhook: POST /webhooks/s3/complete
-activate apiWebhook
-
-apiWebhook -> db: UPDATE status = UPLOADED
-apiWebhook -> eb: PutEvents\n(Video Status Changed: UPLOADED)
-deactivate apiWebhook
-eb -> sqsOrch: Enfileira mensagem
+eb -> sqsMultipart: Enfileira mensagem
 deactivate eb
+
+sqsMultipart -> apiConsumer: Poll (background)
+activate apiConsumer
+apiConsumer -> db: UPDATE status = UPLOADED
+apiConsumer -> eb: PutEvents\n(Video Status Changed: UPLOADED)
+deactivate apiConsumer
+
+eb -> sqsOrch: Enfileira mensagem
 
 == 6. Orchestrator (Fan-out) ==
 

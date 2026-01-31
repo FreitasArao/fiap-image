@@ -27,7 +27,6 @@ System_Boundary(block_upload, "BLOCO B - Upload / API") {
   Container(apiUrls_B, "GET /upload-urls", "Elysia", "Batch 20 URLs")
   Container(apiParts_B, "POST /parts/{n}", "Elysia", "Reporta ETag")
   Container(apiComplete_B, "POST /complete", "Elysia", "Finaliza upload")
-  Container(apiWebhook_B, "POST /webhooks/s3", "Elysia", "Recebe eventos S3")
   ContainerDb(s3Videos_B, "S3 Videos", "S3", "Videos originais")
   ContainerDb(s3Frames_B, "S3 Frames", "S3", "Frames extraidos")
   ContainerDb(cassandra_B, "ScyllaDB", "CQL", "Status video")
@@ -48,19 +47,20 @@ Rel(apiParts_B, cassandra_B, "Atualiza parte")
 Rel(user, apiComplete_B, "5. Finaliza")
 Rel(apiComplete_B, s3Videos_B, "CompleteMultipart")
 
-System_Boundary(block_events, "BLOCO C - Event Bus / Webhook") {
+System_Boundary(block_events, "BLOCO C - Event Bus / SQS") {
   Container(eventbridge_C, "EventBridge", "AWS", "Roteamento de eventos")
-  Container(apiDestWebhook_C, "API Destination", "EB", "Webhook S3 Complete")
+  ContainerQueue(sqsMultipart_C, "SQS Multipart", "SQS", "Eventos S3 Complete")
+  Container(apiConsumer_C, "API Consumer", "Elysia", "Processa eventos S3")
   Container(apiDestSES_C, "API Destination", "EB", "Notificacao SES")
   ContainerQueue(sqsOrch_C, "SQS Orchestrator", "SQS", "Fila orquestracao")
   ContainerQueue(sqsPrint_C, "SQS Print", "SQS", "Fila print (fan-out)")
 }
 
 Rel(s3Videos_B, eventbridge_C, "6. Object Created")
-Rel(eventbridge_C, apiDestWebhook_C, "Roteia para API")
-Rel(apiDestWebhook_C, apiWebhook_B, "POST webhook")
-Rel(apiWebhook_B, cassandra_B, "UPLOADED")
-Rel(apiWebhook_B, eventbridge_C, "7. Video Status Changed")
+Rel(eventbridge_C, sqsMultipart_C, "Enfileira")
+Rel(sqsMultipart_C, apiConsumer_C, "Poll")
+Rel(apiConsumer_C, cassandra_B, "UPLOADED")
+Rel(apiConsumer_C, eventbridge_C, "7. Video Status Changed")
 Rel(eventbridge_C, sqsOrch_C, "Enfileira")
 
 System_Boundary(block_orch, "BLOCO D - Orchestrator (Fan-out)") {

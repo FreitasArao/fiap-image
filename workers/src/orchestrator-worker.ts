@@ -4,11 +4,11 @@ import {
   EventBridgeClient,
   PutEventsCommand,
 } from '@aws-sdk/client-eventbridge'
-import { AbstractSQSConsumer } from '../../src/modules/messaging/sqs/abstract-sqs-consumer'
+import { AbstractSQSConsumer } from '@modules/messaging/sqs/abstract-sqs-consumer'
 import {
   createStoragePathBuilder,
   type StoragePathBuilder,
-} from '../../src/modules/video-processor/infra/services/storage'
+} from '@modules/video-processor/infra/services/storage'
 import { PinoLoggerService } from '@core/libs/logging/pino-logger'
 import { context } from '@opentelemetry/api'
 import { calculateTimeRanges, getTotalSegments } from './time-range'

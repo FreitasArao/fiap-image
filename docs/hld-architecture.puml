@@ -50,10 +50,10 @@ Rel(apiParts_B, cassandraUpload_B, "Atualiza parte")
 Rel(userUpload, apiComplete_B, "5. Finaliza")
 Rel(apiComplete_B, s3Upload_B, "CompleteMultipart")
 
-System_Boundary(block_events, "BLOCO C - S3 -> EventBridge") {
+System_Boundary(block_events, "BLOCO C - S3 -> EventBridge -> SQS") {
   Container(eventbridge_C, "EventBridge", "AWS", "Roteamento")
-  Container(apiDestWebhook_C, "API Destination", "EB", "Webhook")
-  Container(apiWebhook_C, "POST /webhooks/s3", "Elysia", "Recebe evento")
+  ContainerQueue(sqsMultipart_C, "SQS Multipart", "SQS", "Eventos S3")
+  Container(apiConsumer_C, "API Consumer", "Elysia", "Processa eventos S3")
 
   ContainerQueue(sqsOrch_C, "SQS Orchestrator", "SQS", "Fila orquestracao")
   ContainerQueue(sqsPrint_C, "SQS Print", "SQS", "Fila print (N msgs)")
@@ -62,10 +62,10 @@ System_Boundary(block_events, "BLOCO C - S3 -> EventBridge") {
 }
 
 Rel(s3Upload_B, eventbridge_C, "6. Object Created")
-Rel(eventbridge_C, apiDestWebhook_C, "Roteia")
-Rel(apiDestWebhook_C, apiWebhook_C, "POST webhook")
-Rel(apiWebhook_C, cassandraEvent_C, "UPLOADED")
-Rel(apiWebhook_C, eventbridge_C, "7. Status Changed")
+Rel(eventbridge_C, sqsMultipart_C, "Enfileira")
+Rel(sqsMultipart_C, apiConsumer_C, "Poll")
+Rel(apiConsumer_C, cassandraEvent_C, "UPLOADED")
+Rel(apiConsumer_C, eventbridge_C, "7. Status Changed")
 Rel(eventbridge_C, sqsOrch_C, "Enfileira")
 
 System_Boundary(block_orch, "BLOCO D - Orchestrator") {

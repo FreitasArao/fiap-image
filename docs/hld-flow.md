@@ -53,19 +53,21 @@ graph TB
         API5 -->|"CompleteMultipartUpload"| S3_5
     end
 
-    subgraph FASE6["🔔 FASE 6 - Processamento de Evento S3"]
+    subgraph FASE6["🔔 FASE 6 - Processamento de Evento S3 via SQS"]
         S3_6[S3 Videos<br/>Bucket]
         EB6[EventBridge]
-        API6[POST /webhooks/s3<br/>Elysia API]
+        SQS6[SQS Multipart<br/>Queue]
+        API6[API Consumer<br/>Elysia]
         DB6[(ScyllaDB)]
 
         S3_6 -->|"7. Event: Object Created"| EB6
-        EB6 -->|"API Destination"| API6
+        EB6 -->|"Enfileira"| SQS6
+        SQS6 -->|"Poll"| API6
         API6 -->|"Status: UPLOADED"| DB6
     end
 
     subgraph FASE7["🎯 FASE 7 - Enfileiramento para Orquestração"]
-        API7[POST /webhooks/s3<br/>Elysia API]
+        API7[API Consumer<br/>Elysia]
         EB7[EventBridge]
         SQS7[SQS Orchestrator<br/>Queue]
 

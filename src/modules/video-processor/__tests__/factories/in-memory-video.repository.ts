@@ -50,4 +50,27 @@ export class InMemoryVideoRepository implements VideoRepository {
     }
     return Result.ok(undefined)
   }
+
+  async incrementProcessedSegments(
+    videoId: string,
+  ): Promise<Result<number, Error>> {
+    const index = this.items.findIndex((v) => v.id.value === videoId)
+    if (index !== -1) {
+      this.items[index].incrementProcessedSegments()
+      return Result.ok(this.items[index].processedSegments)
+    }
+    return Result.fail(new Error(`Video not found: ${videoId}`))
+  }
+
+  async updateTotalSegments(
+    videoId: string,
+    totalSegments: number,
+  ): Promise<Result<void, Error>> {
+    const index = this.items.findIndex((v) => v.id.value === videoId)
+    if (index !== -1) {
+      this.items[index].setTotalSegments(totalSegments)
+      return Result.ok(undefined)
+    }
+    return Result.fail(new Error(`Video not found: ${videoId}`))
+  }
 }

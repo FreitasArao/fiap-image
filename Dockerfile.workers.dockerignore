@@ -43,21 +43,26 @@ bunfig.toml
 # ==========================================
 # MÓDULOS DA API - Workers não precisam
 # ==========================================
-src/modules/video-processor/
+src/modules/video-processor/application/
+src/modules/video-processor/domain/
+src/modules/video-processor/presentation/
+src/modules/video-processor/__tests__/
+src/modules/video-processor/infra/consumers/
+src/modules/video-processor/infra/repositories/
+src/modules/video-processor/infra/tables/
+src/modules/video-processor/infra/services/aws/
+# Mantém: src/modules/video-processor/infra/services/storage/
 src/modules/docs/
 src/modules/telemetry/
 src/modules/logging/
-src/core/domain/
-src/core/errors/
-src/core/libs/database/
-src/core/libs/elysia.ts
+src/modules/health/
 src/index.ts
 
 # ==========================================
-# WORKERS PRECISAM APENAS DE:
+# WORKERS PRECISAM DE:
 # - workers/src/
-# - src/core/libs/logging/
-# - src/core/abstractions/messaging/
-# - src/modules/messaging/sqs/
+# - src/core/ (todo)
+# - src/modules/messaging/
+# - src/modules/video-processor/infra/services/storage/
 # - package.json, bun.lock, tsconfig.json
 # ==========================================

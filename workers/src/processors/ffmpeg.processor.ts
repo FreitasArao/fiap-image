@@ -49,7 +49,8 @@ export class FFmpegProcessor implements VideoProcessorService {
 
     await proc.exited
 
-    if (proc.exitCode !== 0) {
+    const isError = proc.exitCode !== 0
+    if (isError) {
       const stderr = await new Response(proc.stderr).text()
       throw new Error(
         `FFmpeg failed with exit code ${proc.exitCode}: ${stderr}`,

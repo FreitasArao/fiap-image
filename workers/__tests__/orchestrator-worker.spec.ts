@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { calculateTimeRanges, getTotalSegments } from '../src/time-range'
+import { calculateTimeRanges, getTotalSegments } from '@workers/time-range'
 
 describe('OrchestratorWorker', () => {
   describe('range calculation for orchestration', () => {
@@ -39,18 +39,18 @@ describe('OrchestratorWorker', () => {
       })
     })
 
-    it('should generate correct message count for fan-out', () => {
-      const testCases = [
-        { duration: 95, segmentDuration: 10, expected: 10 },
-        { duration: 300, segmentDuration: 30, expected: 10 },
-        { duration: 60, segmentDuration: 60, expected: 1 },
-        { duration: 61, segmentDuration: 60, expected: 2 },
-      ]
-
-      for (const tc of testCases) {
-        const total = getTotalSegments(tc.duration, tc.segmentDuration)
-        expect(total).toBe(tc.expected)
-      }
+    it.each([
+      { duration: 95, segmentDuration: 10, expected: 10 },
+      { duration: 300, segmentDuration: 30, expected: 10 },
+      { duration: 60, segmentDuration: 60, expected: 1 },
+      { duration: 61, segmentDuration: 60, expected: 2 },
+    ])('should generate correct message count for fan-out', ({
+      duration,
+      segmentDuration,
+      expected,
+    }) => {
+      const total = getTotalSegments(duration, segmentDuration)
+      expect(total).toBe(expected)
     })
   })
 })

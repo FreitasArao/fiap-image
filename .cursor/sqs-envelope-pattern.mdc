@@ -1,0 +1,197 @@
+---
+description: Padrão de Envelope para mensageria SQS com Distributed Tracing
+globs:
+  - src/shared/messaging/**/*.ts
+  - src/services/sqs/**/*.ts
+alwaysApply: false
+---
+
+# SQS Envelope Pattern
+
+Este projeto utiliza o padrão de Envelope para mensageria SQS com suporte a Distributed Tracing via Datadog.
+
+## Estrutura do Envelope
+
+Todas as mensagens SQS devem seguir a estrutura:
+
+```typescript
+interface MessageEnvelope<T> {
+  metadata: EnvelopeMetadata;
+  payload: T;
+}
+
+interface EnvelopeMetadata {
+  messageId: string;      // UUID gerado automaticamente
+  correlationId: string;  // OBRIGATÓRIO - propagar do request original
+  traceId: string;        // Do Datadog ou UUID fallback
+  spanId: string;         // Do Datadog ou UUID fallback
+  source: string;         // Nome do microserviço
+  eventType: string;      // Ex: "notification.push.send"
+  version: string;        // Versão do schema
+  timestamp: string;      // ISO 8601
+  retryCount: number;     // Contador de retentativas
+  maxRetries: number;     // Máximo de retentativas
+}
+```
+
+## Regras Obrigatórias
+
+### 1. correlationId é OBRIGATÓRIO
+
+O `correlationId` DEVE ser propagado do request HTTP original ou de mensagens anteriores. Nunca gere um novo `correlationId` arbitrariamente - ele serve para rastrear toda a cadeia de eventos de negócio.
+
+```typescript
+// CORRETO - propagar correlationId existente
+await publisher.publish(payload, {
+  eventType: 'order.created',
+  correlationId: request.headers['x-correlation-id'] || context.metadata.correlationId,
+});
+
+// INCORRETO - gerar novo correlationId
+await publisher.publish(payload, {
+  eventType: 'order.created',
+  correlationId: crypto.randomUUID(), // NÃO FAÇA ISSO
+});
+```
+
+### 2. Use a Factory para Publicar
+
+Sempre use `createSQSPublisher` ao invés de instanciar `SQSPublisher` diretamente:
+
+```typescript
+import { createSQSPublisher } from '../services/sqs/publish';
+
+const publisher = createSQSPublisher<MyPayload>({
+  queueUrl: ENV.MY_QUEUE_URL,
+}, logger);
+```
+
+### 3. Implemente MessageHandler para Consumir
+
+Handlers devem implementar a interface `MessageHandler<T>`:
+
+```typescript
+import type { MessageHandler, MessageContext, ParseResult } from '../shared/messaging/message-handler';
+
+class MyHandler implements MessageHandler<MyPayload> {
+  parse(rawPayload: unknown): ParseResult<MyPayload> {
+    const result = MyPayloadSchema.safeParse(rawPayload);
+    if (!result.success) {
+      return { success: false, error: result.error.message };
+    }
+    return { success: true, data: result.data };
+  }
+
+  async handle(payload: MyPayload, context: MessageContext): Promise<void> {
+    // Sempre logue o correlationId
+    this.logger.info({
+      message: 'Processing...',
+      correlationId: context.metadata?.correlationId,
+    });
+    
+    // Propague para chamadas downstream
+    await this.service.process(payload, context.metadata?.correlationId);
+  }
+}
+```
+
+### 4. Valide Schemas com Zod
+
+Use `EnvelopeMetadataSchema.safeParse()` para validar metadata e crie schemas Zod para todos os payloads:
+
+```typescript
+import { z } from 'zod';
+
+const MyPayloadSchema = z.object({
+  userId: z.string().uuid(),
+  action: z.string().min(1),
+});
+
+type MyPayload = z.infer<typeof MyPayloadSchema>;
+```
+
+### 5. Dependency Injection
+
+Não importe dependências globais diretamente. Use DI:
+
+```typescript
+// CORRETO - Injetar dependências
+export class EnvelopeFactory {
+  constructor(private readonly tracingProvider?: TracingProvider) {}
+}
+
+// INCORRETO - Importar global
+import tracer from '../../utils/tracer';
+export class EnvelopeFactory {
+  // usa tracer diretamente
+}
+```
+
+### 6. Testes sem jest.mock
+
+Crie test doubles que implementam interfaces:
+
+```typescript
+// doubles/tracing-provider.stub.ts
+class TracingProviderStub implements TracingProvider {
+  private context: TracingContext | null = null;
+
+  setContext(context: TracingContext | null): void {
+    this.context = context;
+  }
+
+  getActiveContext(): TracingContext | null {
+    return this.context;
+  }
+}
+
+// No teste
+const tracingProvider = new TracingProviderStub();
+const factory = new EnvelopeFactory(tracingProvider);
+```
+
+## Arquivos Principais
+
+| Arquivo | Propósito |
+|---------|-----------|
+| `shared/messaging/envelope.types.ts` | Interfaces TypeScript |
+| `shared/messaging/envelope.schema.ts` | Zod schemas |
+| `shared/messaging/envelope.factory.ts` | Criação de envelopes |
+| `shared/messaging/message-handler.ts` | Interface para handlers |
+| `shared/messaging/sqs-publisher.ts` | Publisher genérico |
+| `services/sqs/publish/sqs-publisher.ts` | Factory com deps reais |
+| `services/sqs/sqs-consumer.ts` | Consumer com envelope |
+
+## Event Types
+
+Use o padrão `dominio.entidade.acao`:
+
+- `notification.push.send`
+- `payment.transaction.completed`
+- `user.account.created`
+- `order.item.shipped`
+
+## Logs
+
+Sempre inclua `correlationId` nos logs para rastreabilidade:
+
+```typescript
+this.logger.info({
+  message: 'Message published to SQS',
+  request: {
+    messageId: envelope.metadata.messageId,
+    correlationId: envelope.metadata.correlationId,
+    traceId: envelope.metadata.traceId,
+    eventType: options.eventType,
+  },
+});
+```
+
+## Compatibilidade Retroativa
+
+O `SQSConsumer` aceita tanto formato envelope quanto JSON direto:
+
+- Se a mensagem tem `metadata` e `payload`, trata como envelope
+- Se não, faz parse direto do body (formato legado)
+
+Isso permite migração gradual sem downtime.

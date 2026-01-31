@@ -5,6 +5,10 @@ import {
   createStoragePathBuilder,
   StoragePathBuilder,
 } from '@modules/video-processor/infra/services/storage'
+import {
+  EventBridgeClient,
+  PutEventsCommand,
+} from '@aws-sdk/client-eventbridge'
 
 export type CompleteMultipartEvent = {
   detail: {
@@ -18,14 +22,26 @@ export type CompleteMultipartEvent = {
   }
 }
 
+export interface EventBridgeEmitter {
+  send(command: PutEventsCommand): Promise<unknown>
+}
+
 export class CompleteMultipartHandler {
   private readonly pathBuilder: StoragePathBuilder
+  private readonly eventBridgeClient: EventBridgeEmitter
 
   constructor(
     private readonly logger: AbstractLoggerService,
     private readonly videoRepository: VideoRepository,
+    eventBridgeClient?: EventBridgeEmitter,
   ) {
     this.pathBuilder = createStoragePathBuilder()
+    this.eventBridgeClient =
+      eventBridgeClient ||
+      new EventBridgeClient({
+        region: process.env.AWS_REGION || 'us-east-1',
+        endpoint: process.env.AWS_ENDPOINT || process.env.AWS_ENDPOINT_URL,
+      })
   }
 
   async handle(event: CompleteMultipartEvent): Promise<Result<void, Error>> {
@@ -102,9 +118,27 @@ export class CompleteMultipartHandler {
       this.videoRepository.updateVideo(video),
     ])
 
-    this.logger.log('Video reconciled successfully', {
-      videoId,
-    })
+    this.logger.log('Video status updated to UPLOADED', { videoId })
+
+    // Emit UPLOADED event to trigger orchestrator-worker
+    await this.eventBridgeClient.send(
+      new PutEventsCommand({
+        Entries: [
+          {
+            Source: 'fiapx.video',
+            DetailType: 'Video Status Changed',
+            Detail: JSON.stringify({
+              videoId,
+              videoPath: video.thirdPartyVideoIntegration?.key || videoId,
+              status: 'UPLOADED',
+              timestamp: new Date().toISOString(),
+            }),
+          },
+        ],
+      }),
+    )
+
+    this.logger.log('Emitted UPLOADED event to EventBridge', { videoId })
 
     return Result.ok()
   }

@@ -56,7 +56,7 @@ export class GenerateUploadUrlsUseCase {
     }
 
     const uploadId = video.thirdPartyVideoIntegration.uploadId
-    const bucketKey = video.thirdPartyVideoIntegration.path
+    const bucketKey = video.thirdPartyVideoIntegration.key
 
     this.logger.log('Generating URLs for parts', {
       batch: batch.map((part) => part.partNumber),

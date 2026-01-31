@@ -1,17 +1,19 @@
 import { describe, expect, it, mock } from 'bun:test'
+
+import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+
+import { StoragePathBuilder } from '@modules/video-processor/infra/services/storage'
+import type { Message } from '@aws-sdk/client-sqs'
+import {
+  EventEmitter,
+  VideoProcessorService,
+  VideoStatusEvent,
+} from '@workers/abstractions'
 import {
   PrintWorker,
-  type SegmentEvent,
-  type PrintWorkerDeps,
-} from '../src/print-worker'
-import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
-import type {
-  VideoProcessorService,
-  EventEmitter,
-  VideoStatusEvent,
-} from '../src/abstractions'
-import type { StoragePathBuilder } from '@modules/video-processor/infra/services/storage'
-import type { Message } from '@aws-sdk/client-sqs'
+  SegmentEvent,
+  PrintWorkerDeps,
+} from '@workers/print-worker'
 
 function createMockLogger(): AbstractLoggerService {
   return {
@@ -46,21 +48,14 @@ function createMockEventEmitter(): EventEmitter & {
   }
 }
 
-function createMockPathBuilder(): StoragePathBuilder {
-  return {
-    videoPrint: mock((videoId: string, segment: string) => ({
-      bucket: 'test-bucket',
-      key: `videos/${videoId}/prints/${segment}/`,
-      fullPath: `test-bucket/videos/${videoId}/prints/${segment}/`,
-      videoId,
-      context: 'prints' as const,
-      resourceId: segment,
-    })),
-  } as unknown as StoragePathBuilder
+function createTestPathBuilder(): StoragePathBuilder {
+  return new StoragePathBuilder({
+    videoBucket: 'test-bucket',
+    region: 'us-east-1',
+  })
 }
 
 class TestPrintWorker extends PrintWorker {
-  // Expose protected methods for testing
   public testParseMessage(body: string): SegmentEvent | null {
     return this.parseMessage(body)
   }
@@ -89,7 +84,7 @@ function createTestWorker(deps: Partial<PrintWorkerDeps> = {}) {
   const fullDeps: PrintWorkerDeps = {
     eventEmitter: deps.eventEmitter || eventEmitter,
     processorFactory: deps.processorFactory || (() => processor),
-    pathBuilder: deps.pathBuilder || createMockPathBuilder(),
+    pathBuilder: deps.pathBuilder || createTestPathBuilder(),
     outputBucket: deps.outputBucket || 'test-bucket',
     frameInterval: deps.frameInterval || 1,
   }
