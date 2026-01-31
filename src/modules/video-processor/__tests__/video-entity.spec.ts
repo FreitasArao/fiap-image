@@ -115,7 +115,9 @@ describe('Video Entity', () => {
     })
 
     it('should do nothing when status is beyond UPLOADING', () => {
-      const video = VideoFactory.create({ status: VideoStatusVO.create('UPLOADED') })
+      const video = VideoFactory.create({
+        status: VideoStatusVO.create('UPLOADED'),
+      })
 
       const result = video.startUploadingIfNeeded()
 

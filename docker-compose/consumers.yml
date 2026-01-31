@@ -13,7 +13,6 @@ services:
       - SQS_QUEUE_URL=http://localstack:4566/000000000000/orchestrator-queue
       - PRINT_QUEUE_URL=http://localstack:4566/000000000000/print-queue
       - S3_INPUT_BUCKET=fiapx-video-parts
-      - SEGMENT_DURATION=10
     depends_on:
       localstack-init:
         condition: service_completed_successfully

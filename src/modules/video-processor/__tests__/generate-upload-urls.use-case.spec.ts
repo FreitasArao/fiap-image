@@ -14,7 +14,7 @@ import { context } from '@opentelemetry/api'
 function createMockLogger(): AbstractLoggerService {
   const logger = new PinoLoggerService(
     {
-      suppressConsole: false,
+      suppressConsole: true,
     },
     context.active(),
   )

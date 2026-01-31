@@ -1,16 +1,24 @@
-import { describe, expect, it, mock, beforeEach, spyOn } from 'bun:test'
+import { describe, expect, it, mock } from 'bun:test'
 import { context } from '@opentelemetry/api'
 import { PinoLoggerService } from '@core/libs/logging/pino-logger'
 import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 import { StoragePathBuilder } from '@modules/video-processor/infra/services/storage'
 import type { MessageContext } from '@core/messaging'
 import type { SegmentMessage } from '@core/messaging/schemas'
+import { Result } from '@core/domain/result'
+import { NonRetryableError } from '@core/errors/non-retryable.error'
 import type {
-  EventEmitter,
+  EventBusEmitter,
+  VideoStatusChangedEvent,
+} from '@core/abstractions/messaging'
+import type {
   VideoProcessorService,
-  VideoStatusEvent,
+  ExtractFramesResult,
 } from '@workers/abstractions'
-import { SegmentEventHandler, PrintWorkerDeps } from '@workers/print-worker'
+import {
+  SegmentEventHandler,
+  type PrintWorkerDeps,
+} from '@workers/print-worker'
 
 function createMockLogger(): AbstractLoggerService {
   return new PinoLoggerService({ suppressConsole: true }, context.active())
@@ -21,19 +29,19 @@ function createMockProcessor(): VideoProcessorService {
     setup: mock(() => Promise.resolve()),
     cleanup: mock(() => Promise.resolve()),
     extractFramesFromUrl: mock(() =>
-      Promise.resolve({ outputDir: '/tmp/frames', count: 10 }),
+      Promise.resolve(Result.ok({ outputDir: '/tmp/frames', count: 10 })),
     ),
-    uploadDir: mock(() => Promise.resolve()),
+    uploadDir: mock(() => Promise.resolve(Result.ok(undefined))),
   }
 }
 
-function createMockEventEmitter(): EventEmitter & {
-  emittedEvents: VideoStatusEvent[]
+function createMockEventEmitter(): EventBusEmitter & {
+  emittedEvents: VideoStatusChangedEvent[]
 } {
-  const emittedEvents: VideoStatusEvent[] = []
+  const emittedEvents: VideoStatusChangedEvent[] = []
   return {
     emittedEvents,
-    emitVideoStatus: mock((event: VideoStatusEvent) => {
+    emitVideoStatusChanged: mock((event: VideoStatusChangedEvent) => {
       emittedEvents.push(event)
       return Promise.resolve()
     }),
@@ -66,8 +74,8 @@ function createTestHandler(deps: Partial<PrintWorkerDeps> = {}) {
   return {
     handler,
     logger,
-    eventEmitter: eventEmitter as EventEmitter & {
-      emittedEvents: VideoStatusEvent[]
+    eventEmitter: eventEmitter as EventBusEmitter & {
+      emittedEvents: VideoStatusChangedEvent[]
     },
     processor,
     deps: fullDeps,
@@ -109,10 +117,8 @@ describe('SegmentEventHandler', () => {
 
       const result = handler.parse(validPayload)
 
-      expect(result.success).toBe(true)
-      if (result.success) {
-        expect(result.data).toEqual(validPayload)
-      }
+      expect(result.isSuccess).toBe(true)
+      expect(result.value).toEqual(validPayload)
     })
 
     it('should fail for invalid payload', () => {
@@ -120,18 +126,40 @@ describe('SegmentEventHandler', () => {
 
       const result = handler.parse({ invalid: 'data' })
 
-      expect(result.success).toBe(false)
+      expect(result.isFailure).toBe(true)
     })
 
     it('should fail for payload missing required fields', () => {
       const { handler } = createTestHandler()
 
-      const result = handler.parse({
-        videoId: 'video-123',
-        // missing presignedUrl and other required fields
-      })
+      const result = handler.parse({ videoId: 'video-123' })
 
-      expect(result.success).toBe(false)
+      expect(result.isFailure).toBe(true)
+    })
+
+    it.each([
+      ['empty videoId', { videoId: '' }],
+      ['invalid presignedUrl', { presignedUrl: 'not-a-url' }],
+      ['zero segmentNumber', { segmentNumber: 0 }],
+      ['negative segmentNumber', { segmentNumber: -1 }],
+      ['zero totalSegments', { totalSegments: 0 }],
+      ['negative startTime', { startTime: -1 }],
+      ['zero endTime', { endTime: 0 }],
+      ['invalid userEmail', { userEmail: 'not-email' }],
+    ])('should fail for %s', (_, override) => {
+      const { handler } = createTestHandler()
+      const basePayload = {
+        videoId: 'video-123',
+        presignedUrl: 'https://s3.amazonaws.com/bucket/key',
+        segmentNumber: 1,
+        totalSegments: 10,
+        startTime: 0,
+        endTime: 10,
+      }
+
+      const result = handler.parse({ ...basePayload, ...override })
+
+      expect(result.isFailure).toBe(true)
     })
   })
 
@@ -148,7 +176,6 @@ describe('SegmentEventHandler', () => {
     ])('should return %s for error "%s"', (errorMessage, expected) => {
       const { handler } = createTestHandler()
 
-      // Access private method via any
       const result = (
         handler as unknown as { isNonRetryableError: (e: Error) => boolean }
       ).isNonRetryableError(new Error(errorMessage))
@@ -161,7 +188,6 @@ describe('SegmentEventHandler', () => {
     it('should return true when segment is the last one', () => {
       const { handler } = createTestHandler()
 
-      // Access private method via any
       const result = (
         handler as unknown as {
           checkAndUpdateProgress: (
@@ -227,8 +253,9 @@ describe('SegmentEventHandler', () => {
         endTime: 10,
       }
 
-      await handler.handle(message, createContext('corr-123'))
+      const result = await handler.handle(message, createContext('corr-123'))
 
+      expect(result.isSuccess).toBe(true)
       expect(processor.setup).toHaveBeenCalled()
       expect(processor.extractFramesFromUrl).toHaveBeenCalledWith(
         'https://s3.amazonaws.com/bucket/video.mp4',
@@ -255,8 +282,9 @@ describe('SegmentEventHandler', () => {
         videoName: 'my-video.mp4',
       }
 
-      await handler.handle(message, createContext('corr-123'))
+      const result = await handler.handle(message, createContext('corr-123'))
 
+      expect(result.isSuccess).toBe(true)
       expect(eventEmitter.emittedEvents).toHaveLength(1)
       expect(eventEmitter.emittedEvents[0]).toMatchObject({
         videoId: 'video-123',
@@ -280,15 +308,16 @@ describe('SegmentEventHandler', () => {
         endTime: 50,
       }
 
-      await handler.handle(message, createContext('corr-123'))
+      const result = await handler.handle(message, createContext('corr-123'))
 
+      expect(result.isSuccess).toBe(true)
       expect(eventEmitter.emittedEvents).toHaveLength(0)
     })
 
-    it('should cleanup even if processing fails', async () => {
+    it('should cleanup and return failure when extractFramesFromUrl fails', async () => {
       const processor = createMockProcessor()
       processor.extractFramesFromUrl = mock(() =>
-        Promise.reject(new Error('FFmpeg failed')),
+        Promise.resolve(Result.fail(new Error('FFmpeg failed'))),
       )
 
       const { handler } = createTestHandler({
@@ -304,19 +333,18 @@ describe('SegmentEventHandler', () => {
         endTime: 10,
       }
 
-      await expect(
-        handler.handle(message, createContext('corr-123')),
-      ).rejects.toThrow('FFmpeg failed')
+      const result = await handler.handle(message, createContext('corr-123'))
 
+      expect(result.isFailure).toBe(true)
       expect(processor.cleanup).toHaveBeenCalled()
     })
 
-    it('should emit FAILED event for non-retryable errors', async () => {
+    it('should emit FAILED event and return NonRetryableError for non-retryable errors', async () => {
       const eventEmitter = createMockEventEmitter()
       const processor = createMockProcessor()
       processor.extractFramesFromUrl = mock(() =>
-        Promise.reject(
-          new Error('NoSuchKey: The specified key does not exist'),
+        Promise.resolve(
+          Result.fail(new Error('NoSuchKey: The specified key does not exist')),
         ),
       )
 
@@ -336,10 +364,10 @@ describe('SegmentEventHandler', () => {
         videoName: 'my-video.mp4',
       }
 
-      await expect(
-        handler.handle(message, createContext('corr-123')),
-      ).rejects.toThrow()
+      const result = await handler.handle(message, createContext('corr-123'))
 
+      expect(result.isFailure).toBe(true)
+      expect(NonRetryableError.isNonRetryable(result.error)).toBe(true)
       expect(eventEmitter.emittedEvents).toHaveLength(1)
       expect(eventEmitter.emittedEvents[0]).toMatchObject({
         videoId: 'video-123',
@@ -353,7 +381,7 @@ describe('SegmentEventHandler', () => {
       const eventEmitter = createMockEventEmitter()
       const processor = createMockProcessor()
       processor.extractFramesFromUrl = mock(() =>
-        Promise.reject(new Error('Connection timeout')),
+        Promise.resolve(Result.fail(new Error('Connection timeout'))),
       )
 
       const { handler } = createTestHandler({
@@ -370,10 +398,10 @@ describe('SegmentEventHandler', () => {
         endTime: 10,
       }
 
-      await expect(
-        handler.handle(message, createContext('corr-123')),
-      ).rejects.toThrow()
+      const result = await handler.handle(message, createContext('corr-123'))
 
+      expect(result.isFailure).toBe(true)
+      expect(NonRetryableError.isNonRetryable(result.error)).toBe(false)
       expect(eventEmitter.emittedEvents).toHaveLength(0)
     })
 
@@ -390,11 +418,84 @@ describe('SegmentEventHandler', () => {
         endTime: 100,
       }
 
-      // Context without metadata (legacy format)
-      await handler.handle(message, createContext())
+      const result = await handler.handle(message, createContext())
 
+      expect(result.isSuccess).toBe(true)
       expect(eventEmitter.emittedEvents).toHaveLength(1)
       expect(eventEmitter.emittedEvents[0].correlationId).toBe('sqs-msg-123')
+    })
+
+    it('should create processor with correct ID', async () => {
+      let capturedVideoId = ''
+      const processorFactory = (videoId: string) => {
+        capturedVideoId = videoId
+        return createMockProcessor()
+      }
+
+      const { handler } = createTestHandler({ processorFactory })
+
+      const message: SegmentMessage = {
+        videoId: 'video-abc',
+        presignedUrl: 'https://s3.amazonaws.com/bucket/video.mp4',
+        segmentNumber: 5,
+        totalSegments: 10,
+        startTime: 40,
+        endTime: 50,
+      }
+
+      await handler.handle(message, createContext('corr-123'))
+
+      expect(capturedVideoId).toBe('video-abc-seg5')
+    })
+
+    it('should call uploadDir with correct prefix format', async () => {
+      const processor = createMockProcessor()
+      const { handler } = createTestHandler({
+        processorFactory: () => processor,
+      })
+
+      const message: SegmentMessage = {
+        videoId: 'video-123',
+        presignedUrl: 'https://s3.amazonaws.com/bucket/video.mp4',
+        segmentNumber: 5,
+        totalSegments: 10,
+        startTime: 40,
+        endTime: 50,
+      }
+
+      await handler.handle(message, createContext('corr-123'))
+
+      expect(processor.uploadDir).toHaveBeenCalledWith(
+        '/tmp/frames',
+        'test-bucket',
+        'video/video-123/prints/segment_005',
+        'frame_*.jpg',
+      )
+    })
+
+    it('should cleanup and return failure when uploadDir fails', async () => {
+      const processor = createMockProcessor()
+      processor.uploadDir = mock(() =>
+        Promise.resolve(Result.fail(new Error('S3 upload failed'))),
+      )
+
+      const { handler } = createTestHandler({
+        processorFactory: () => processor,
+      })
+
+      const message: SegmentMessage = {
+        videoId: 'video-123',
+        presignedUrl: 'https://s3.amazonaws.com/bucket/video.mp4',
+        segmentNumber: 1,
+        totalSegments: 10,
+        startTime: 0,
+        endTime: 10,
+      }
+
+      const result = await handler.handle(message, createContext('corr-123'))
+
+      expect(result.isFailure).toBe(true)
+      expect(processor.cleanup).toHaveBeenCalled()
     })
   })
 })

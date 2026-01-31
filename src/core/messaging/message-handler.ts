@@ -1,10 +1,7 @@
 import type { MessageContext } from './envelope.types'
-
-export type ParseResult<T> =
-  | { success: true; data: T }
-  | { success: false; error: string }
+import { Result } from '@core/domain/result'
 
 export interface MessageHandler<T> {
-  parse(rawPayload: unknown): ParseResult<T>
-  handle(payload: T, context: MessageContext): Promise<void>
+  parse(rawPayload: unknown): Result<T, Error>
+  handle(payload: T, context: MessageContext): Promise<Result<void, Error>>
 }

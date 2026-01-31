@@ -27,7 +27,7 @@ export {
 } from './tracing-provider'
 
 // Handler
-export type { ParseResult, MessageHandler } from './message-handler'
+export type { MessageHandler } from './message-handler'
 
 // Payload Schemas
 export * from './schemas'

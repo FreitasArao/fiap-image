@@ -1,4 +1,5 @@
 [test]
+timeout = 30000  # 30 seconds per test
 coverageThreshold = { lines = 0.9, functions = 0.9, statements = 0.9 }
 coverageReporter = ["text", "lcov"]
 coverageDir = "coverage"

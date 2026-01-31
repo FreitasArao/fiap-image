@@ -8,6 +8,7 @@ import {
   type EnvelopeMetadata,
 } from '@core/messaging'
 import { NonRetryableError } from '@core/errors/non-retryable.error'
+import { CorrelationStore } from '@core/libs/context'
 
 export interface SQSConsumerConfig {
   queueUrl: string
@@ -76,68 +77,89 @@ export abstract class AbstractSQSConsumer<TPayload> {
 
   private async processMessage(message: Message): Promise<Message | undefined> {
     const body = message.Body ?? '{}'
-    let context: MessageContext | null = null
+    const { payload, metadata } = this.parseBody(body)
 
-    try {
-      const { payload, metadata } = this.parseBody(body)
+    // Extract correlation context from message metadata
+    const correlationContext = {
+      correlationId: metadata?.correlationId ?? message.MessageId ?? '',
+      traceId: metadata?.traceId,
+      spanId: metadata?.spanId,
+    }
 
-      context = {
+    // Wrap entire message processing in correlation context
+    // This allows all downstream code to access correlation data automatically
+    return CorrelationStore.run(correlationContext, async () => {
+      const context: MessageContext = {
         metadata,
         sqsMessage: message,
         messageId: message.MessageId,
       }
 
-      this.logger.log('Processing message', {
-        messageId: message.MessageId,
-        correlationId: metadata?.correlationId,
-        traceId: metadata?.traceId,
-        eventType: metadata?.eventType,
-        isEnvelope: metadata !== null,
-      })
-
-      const parseResult = this.handler.parse(payload)
-
-      if (!parseResult.success) {
-        this.logger.warn('Payload validation failed', {
-          error: parseResult.error,
+      try {
+        this.logger.log('Processing message', {
           messageId: message.MessageId,
-          correlationId: metadata?.correlationId,
-          traceId: metadata?.traceId,
           eventType: metadata?.eventType,
+          isEnvelope: metadata !== null,
         })
 
-        throw new NonRetryableError(parseResult.error)
-      }
+        const parseResult = this.handler.parse(payload)
 
-      await this.handler.handle(parseResult.data, context)
+        if (parseResult.isFailure) {
+          this.logger.warn('Payload validation failed', {
+            error: parseResult.error.message,
+            messageId: message.MessageId,
+            eventType: metadata?.eventType,
+          })
+          // Non-retryable: remove from queue
+          return message
+        }
 
-      this.logger.log('Message processed', {
-        messageId: message.MessageId,
-        correlationId: metadata?.correlationId,
-      })
+        const handleResult = await this.handler.handle(
+          parseResult.value,
+          context,
+        )
 
-      return message
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error)
+        if (handleResult.isFailure) {
+          // Use type guard to properly extract error
+          const handlerError: Error = handleResult.error
+          const errorMessage = handlerError.message
 
-      if (NonRetryableError.isNonRetryable(error)) {
-        this.logger.warn('Non-retryable error, removing message from queue', {
+          if (NonRetryableError.isNonRetryable(handlerError)) {
+            this.logger.warn(
+              'Non-retryable error, removing message from queue',
+              {
+                error: errorMessage,
+                messageId: message.MessageId,
+              },
+            )
+            return message
+          }
+
+          this.logger.error('Error processing message', {
+            error: errorMessage,
+            messageId: message.MessageId,
+          })
+
+          throw handlerError
+        }
+
+        this.logger.log('Message processed', {
+          messageId: message.MessageId,
+        })
+
+        return message
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error)
+
+        this.logger.error('Unexpected error processing message', {
           error: errorMessage,
           messageId: message.MessageId,
-          correlationId: context?.metadata?.correlationId,
         })
-        return message
+
+        throw error
       }
-
-      this.logger.error('Error processing message', {
-        error: errorMessage,
-        messageId: message.MessageId,
-        correlationId: context?.metadata?.correlationId,
-      })
-
-      throw error
-    }
+    })
   }
 
   private setupEventListeners(): void {

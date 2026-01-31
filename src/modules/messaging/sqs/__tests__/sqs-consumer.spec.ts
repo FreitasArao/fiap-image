@@ -1,41 +1,52 @@
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
-import type { MessageHandler, MessageContext, ParseResult } from '@core/messaging'
+import type { MessageHandler, MessageContext } from '@core/messaging'
+import { Result } from '@core/domain/result'
+import { NonRetryableError } from '@core/errors/non-retryable.error'
 import { createSQSConsumer } from '../abstract-sqs-consumer'
 import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 
-class TestMessageHandler implements MessageHandler<{ id: string; value: number }> {
+type TestPayload = { id: string; value: number }
+
+class TestMessageHandler implements MessageHandler<TestPayload> {
   public parsedPayloads: unknown[] = []
-  public handledPayloads: Array<{ payload: unknown; context: MessageContext }> = []
+  public handledPayloads: Array<{
+    payload: TestPayload
+    context: MessageContext
+  }> = []
   public shouldFailParse = false
   public shouldFailHandle = false
+  public shouldFailWithNonRetryable = false
 
-  parse(rawPayload: unknown): ParseResult<{ id: string; value: number }> {
+  parse(rawPayload: unknown): Result<TestPayload, Error> {
     this.parsedPayloads.push(rawPayload)
 
     if (this.shouldFailParse) {
-      return { success: false, error: 'Parse failed' }
+      return Result.fail(new Error('Parse failed'))
     }
 
     const payload = rawPayload as { id?: string; value?: number }
     if (!payload.id || typeof payload.value !== 'number') {
-      return { success: false, error: 'Invalid payload structure' }
+      return Result.fail(new Error('Invalid payload structure'))
     }
 
-    return {
-      success: true,
-      data: { id: payload.id, value: payload.value },
-    }
+    return Result.ok({ id: payload.id, value: payload.value })
   }
 
   async handle(
-    payload: { id: string; value: number },
+    payload: TestPayload,
     context: MessageContext,
-  ): Promise<void> {
+  ): Promise<Result<void, Error>> {
     this.handledPayloads.push({ payload, context })
 
-    if (this.shouldFailHandle) {
-      throw new Error('Handle failed')
+    if (this.shouldFailWithNonRetryable) {
+      return Result.fail(new NonRetryableError('Non-retryable error'))
     }
+
+    if (this.shouldFailHandle) {
+      return Result.fail(new Error('Handle failed'))
+    }
+
+    return Result.ok(undefined)
   }
 }
 
@@ -70,20 +81,16 @@ describe('AbstractSQSConsumer', () => {
     it('should parse valid payload structure', () => {
       const result = handler.parse({ id: 'test-1', value: 100 })
 
-      expect(result.success).toBe(true)
-      if (result.success) {
-        expect(result.data.id).toBe('test-1')
-        expect(result.data.value).toBe(100)
-      }
+      expect(result.isSuccess).toBe(true)
+      expect(result.value.id).toBe('test-1')
+      expect(result.value.value).toBe(100)
     })
 
     it('should fail for invalid payload structure', () => {
       const result = handler.parse({ invalid: 'data' })
 
-      expect(result.success).toBe(false)
-      if (!result.success) {
-        expect(result.error).toBe('Invalid payload structure')
-      }
+      expect(result.isFailure).toBe(true)
+      expect(result.error.message).toBe('Invalid payload structure')
     })
 
     it('should handle payload with context', async () => {
@@ -104,11 +111,45 @@ describe('AbstractSQSConsumer', () => {
         messageId: 'sqs-msg-id',
       }
 
-      await handler.handle(payload, msgContext)
+      const result = await handler.handle(payload, msgContext)
 
+      expect(result.isSuccess).toBe(true)
       expect(handler.handledPayloads.length).toBe(1)
       expect(handler.handledPayloads[0].payload).toEqual(payload)
-      expect(handler.handledPayloads[0].context.metadata?.correlationId).toBe('corr-456')
+      expect(handler.handledPayloads[0].context.metadata?.correlationId).toBe(
+        'corr-456',
+      )
+    })
+  })
+
+  describe('non-retryable behavior', () => {
+    it('should return failure Result when parse fails', () => {
+      handler.shouldFailParse = true
+
+      const result = handler.parse({ id: 'test', value: 1 })
+
+      expect(result.isFailure).toBe(true)
+      expect(result.error.message).toBe('Parse failed')
+    })
+
+    it('should return failure Result with NonRetryableError', async () => {
+      handler.shouldFailWithNonRetryable = true
+      const msgContext: MessageContext = { metadata: null, messageId: 'msg-1' }
+
+      const result = await handler.handle({ id: 'test', value: 1 }, msgContext)
+
+      expect(result.isFailure).toBe(true)
+      expect(NonRetryableError.isNonRetryable(result.error)).toBe(true)
+    })
+
+    it('should return failure Result with retryable Error', async () => {
+      handler.shouldFailHandle = true
+      const msgContext: MessageContext = { metadata: null, messageId: 'msg-1' }
+
+      const result = await handler.handle({ id: 'test', value: 1 }, msgContext)
+
+      expect(result.isFailure).toBe(true)
+      expect(NonRetryableError.isNonRetryable(result.error)).toBe(false)
     })
   })
 })

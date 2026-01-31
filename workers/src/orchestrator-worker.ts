@@ -1,10 +1,8 @@
-import {
-  EventBridgeClient,
-  PutEventsCommand,
-} from '@aws-sdk/client-eventbridge'
+import { EventBridgeClient } from '@aws-sdk/client-eventbridge'
 import { context } from '@opentelemetry/api'
 import { PinoLoggerService } from '@core/libs/logging/pino-logger'
 import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import { CorrelationStore } from '@core/libs/context'
 import {
   createStoragePathBuilder,
   type StoragePathBuilder,
@@ -14,75 +12,76 @@ import {
   createSQSPublisher,
   type AbstractSQSPublisher,
 } from '@modules/messaging/sqs'
-import type {
-  MessageHandler,
-  MessageContext,
-  ParseResult,
-} from '@core/messaging'
+import type { MessageHandler, MessageContext } from '@core/messaging'
 import {
   VideoEventSchema,
   VIDEO_EVENT_TYPES,
   type VideoEvent,
   type SegmentMessage,
 } from '@core/messaging/schemas'
+import { Result } from '@core/domain/result'
+import type { EventBusEmitter } from '@core/abstractions/messaging'
 import { calculateTimeRanges, getTotalSegments } from './time-range'
 import { generatePresignedUrl } from './s3-presign.service'
 import { NonRetryableError } from '@core/errors/non-retryable.error'
+import { EventBridgeEmitter } from './adapters'
+
+/** Default segment duration: 10 seconds */
+const DEFAULT_SEGMENT_DURATION_MS = 10_000
 
 export interface OrchestratorWorkerDeps {
   logger: AbstractLoggerService
-  eventBridgeClient: EventBridgeClient
+  eventEmitter: EventBusEmitter
   printQueuePublisher: AbstractSQSPublisher<SegmentMessage>
   pathBuilder?: StoragePathBuilder
-  /** Segment duration in milliseconds (default: 10000ms = 10s) */
-  segmentDurationMs?: number
 }
 
 export class VideoEventHandler implements MessageHandler<VideoEvent> {
   private readonly pathBuilder: StoragePathBuilder
-  /** Segment duration in milliseconds */
-  private readonly segmentDurationMs: number
 
   constructor(private readonly deps: OrchestratorWorkerDeps) {
     this.pathBuilder = deps.pathBuilder ?? createStoragePathBuilder()
-    // SEGMENT_DURATION env var is now in milliseconds (default: 10000ms = 10s)
-    this.segmentDurationMs =
-      deps.segmentDurationMs ??
-      parseInt(process.env.SEGMENT_DURATION ?? '10000', 10)
   }
 
-  parse(rawPayload: unknown): ParseResult<VideoEvent> {
+  parse(rawPayload: unknown): Result<VideoEvent, Error> {
     const result = VideoEventSchema.safeParse(rawPayload)
     if (!result.success) {
-      return { success: false, error: result.error.message }
+      return Result.fail(new Error(result.error.message))
     }
-    return { success: true, data: result.data }
+    return Result.ok(result.data)
   }
 
-  async handle(event: VideoEvent, context: MessageContext): Promise<void> {
+  async handle(
+    event: VideoEvent,
+    context: MessageContext,
+  ): Promise<Result<void, Error>> {
     const { videoId, videoPath, duration, userEmail, videoName } = event.detail
 
     const correlationId =
+      CorrelationStore.correlationId ??
       context.metadata?.correlationId ??
       event.detail.correlationId ??
       context.messageId ??
       ''
-    const traceId = context.metadata?.traceId ?? event.detail.traceId
-    const spanId = context.metadata?.spanId
+    const traceId =
+      CorrelationStore.traceId ??
+      context.metadata?.traceId ??
+      event.detail.traceId
+    const spanId = CorrelationStore.spanId ?? context.metadata?.spanId
 
-    this.deps.logger.log('[ORCHESTRATOR] Processing video', {
-      videoId,
-      correlationId,
-      traceId,
-    })
+    this.deps.logger.log('[ORCHESTRATOR] Processing video', { videoId })
 
     if (!videoPath) {
-      throw new NonRetryableError(`Missing videoPath for video: ${videoId}`)
+      return Result.fail(
+        new NonRetryableError(`Missing videoPath for video: ${videoId}`),
+      )
     }
 
     if (!duration || duration <= 0) {
-      throw new NonRetryableError(
-        `Missing or invalid duration for video: ${videoId}`,
+      return Result.fail(
+        new NonRetryableError(
+          `Missing or invalid duration for video: ${videoId}`,
+        ),
       )
     }
 
@@ -90,29 +89,28 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
     const inputStoragePath = this.pathBuilder.parse(videoPath)
 
     if (!inputStoragePath) {
-      throw new NonRetryableError(`Invalid videoPath format: ${videoPath}`)
+      return Result.fail(
+        new NonRetryableError(`Invalid videoPath format: ${videoPath}`),
+      )
     }
 
     const s3Key = inputStoragePath.key
 
     this.deps.logger.log(
       `[ORCHESTRATOR] Duration: ${duration}ms (${duration / 1000}s)`,
-      { correlationId },
     )
 
-    const ranges = calculateTimeRanges(duration, this.segmentDurationMs)
-    const totalSegments = getTotalSegments(duration, this.segmentDurationMs)
-
-    this.deps.logger.log(
-      `[ORCHESTRATOR] Calculated ${totalSegments} segments`,
-      { correlationId },
+    const ranges = calculateTimeRanges(duration, DEFAULT_SEGMENT_DURATION_MS)
+    const totalSegments = getTotalSegments(
+      duration,
+      DEFAULT_SEGMENT_DURATION_MS,
     )
+
+    this.deps.logger.log(`[ORCHESTRATOR] Calculated ${totalSegments} segments`)
 
     const presignedUrl = await generatePresignedUrl(inputBucket, s3Key, 7200)
 
-    this.deps.logger.log('[ORCHESTRATOR] Generated presigned URL', {
-      correlationId,
-    })
+    this.deps.logger.log('[ORCHESTRATOR] Generated presigned URL')
 
     const messages: SegmentMessage[] = ranges.map((range) => ({
       videoId,
@@ -136,53 +134,27 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
     )
 
     if (publishResult.isFailure) {
-      throw new Error(
-        `Failed to publish segments: ${publishResult.error?.message}`,
+      return Result.fail(
+        new Error(
+          `Failed to publish segments: ${publishResult.error?.message}`,
+        ),
       )
     }
 
-    await this.emitStatusEvent(
+    await this.deps.eventEmitter.emitVideoStatusChanged({
       videoId,
-      'PROCESSING',
+      status: 'PROCESSING',
       correlationId,
       userEmail,
       videoName,
-    )
+      traceId,
+    })
 
     this.deps.logger.log(
       `[ORCHESTRATOR] Published ${messages.length} messages to print queue`,
-      { correlationId },
     )
-  }
 
-  private async emitStatusEvent(
-    videoId: string,
-    status: string,
-    correlationId: string,
-    userEmail?: string,
-    videoName?: string,
-  ): Promise<void> {
-    await this.deps.eventBridgeClient.send(
-      new PutEventsCommand({
-        Entries: [
-          {
-            Source: 'fiapx.video',
-            DetailType: 'Video Status Changed',
-            Detail: JSON.stringify({
-              videoId,
-              status,
-              correlationId,
-              userEmail: userEmail ?? 'user@example.com',
-              videoName: videoName ?? 'video',
-              timestamp: new Date().toISOString(),
-            }),
-          },
-        ],
-      }),
-    )
-    this.deps.logger.log(`[ORCHESTRATOR] Emitted event: ${status}`, {
-      correlationId,
-    })
+    return Result.ok(undefined)
   }
 }
 
@@ -208,7 +180,7 @@ if (import.meta.main) {
 
   const handler = new VideoEventHandler({
     logger,
-    eventBridgeClient,
+    eventEmitter: new EventBridgeEmitter(eventBridgeClient),
     printQueuePublisher,
   })
 

@@ -2,27 +2,27 @@ import { EventBridgeClient } from '@aws-sdk/client-eventbridge'
 import { context } from '@opentelemetry/api'
 import { PinoLoggerService } from '@core/libs/logging/pino-logger'
 import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import { CorrelationStore } from '@core/libs/context'
 import {
   StoragePathBuilder,
   createStoragePathBuilder,
 } from '@modules/video-processor/infra/services/storage'
 import { createSQSConsumer } from '@modules/messaging/sqs'
-import type {
-  MessageHandler,
-  MessageContext,
-  ParseResult,
-} from '@core/messaging'
+import type { MessageHandler, MessageContext } from '@core/messaging'
 import {
   SegmentMessageSchema,
   type SegmentMessage,
 } from '@core/messaging/schemas'
+import { Result } from '@core/domain/result'
+import type { EventBusEmitter } from '@core/abstractions/messaging'
+import { NonRetryableError } from '@core/errors/non-retryable.error'
 import { FFmpegProcessor } from './processors'
-import type { VideoProcessorService, EventEmitter } from './abstractions'
+import type { VideoProcessorService } from './abstractions'
 import { EventBridgeEmitter } from './adapters'
 
 export interface PrintWorkerDeps {
   logger: AbstractLoggerService
-  eventEmitter: EventEmitter
+  eventEmitter: EventBusEmitter
   processorFactory: (videoId: string) => VideoProcessorService
   pathBuilder?: StoragePathBuilder
   outputBucket?: string
@@ -42,18 +42,18 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
       deps.frameInterval ?? parseInt(process.env.FRAME_INTERVAL ?? '1', 10)
   }
 
-  parse(rawPayload: unknown): ParseResult<SegmentMessage> {
+  parse(rawPayload: unknown): Result<SegmentMessage, Error> {
     const result = SegmentMessageSchema.safeParse(rawPayload)
     if (!result.success) {
-      return { success: false, error: result.error.message }
+      return Result.fail(new Error(result.error.message))
     }
-    return { success: true, data: result.data }
+    return Result.ok(result.data)
   }
 
   async handle(
     message: SegmentMessage,
     context: MessageContext,
-  ): Promise<void> {
+  ): Promise<Result<void, Error>> {
     const {
       videoId,
       presignedUrl,
@@ -65,17 +65,19 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
       videoName,
     } = message
 
+    // Get correlation context from AsyncLocalStorage (set by consumer)
+    // Fallback to message context for backwards compatibility
     const correlationId =
-      context.metadata?.correlationId ?? context.messageId ?? ''
-    const traceId = context.metadata?.traceId
+      CorrelationStore.correlationId ??
+      context.metadata?.correlationId ??
+      context.messageId ??
+      ''
 
+    // correlationId is now automatically included in logs via Pino mixin
     this.deps.logger.log(
       `[PRINT] Processing segment ${segmentNumber}/${totalSegments} for video: ${videoId}`,
-      { correlationId, traceId },
     )
-    this.deps.logger.log(`[PRINT] Time range: ${startTime}s - ${endTime}s`, {
-      correlationId,
-    })
+    this.deps.logger.log(`[PRINT] Time range: ${startTime}s - ${endTime}s`)
 
     const processor = this.deps.processorFactory(
       `${videoId}-seg${segmentNumber}`,
@@ -84,25 +86,32 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
     try {
       await processor.setup()
 
-      this.deps.logger.log(
-        '[PRINT] Extracting frames from URL (streaming)...',
-        { correlationId },
-      )
+      this.deps.logger.log('[PRINT] Extracting frames from URL (streaming)...')
 
-      const { outputDir, count } = await processor.extractFramesFromUrl(
+      const extractResult = await processor.extractFramesFromUrl(
         presignedUrl,
         startTime,
         endTime,
         this.frameInterval,
       )
 
-      this.deps.logger.log(`[PRINT] Extracted ${count} frames`, {
-        correlationId,
-      })
+      if (extractResult.isFailure) {
+        await processor.cleanup()
+        return this.handleProcessingError(
+          extractResult.error,
+          videoId,
+          segmentNumber,
+          correlationId,
+          userEmail,
+          videoName,
+        )
+      }
 
-      this.deps.logger.log('[PRINT] Uploading frames to S3...', {
-        correlationId,
-      })
+      const { outputDir, count } = extractResult.value
+
+      this.deps.logger.log(`[PRINT] Extracted ${count} frames`)
+
+      this.deps.logger.log('[PRINT] Uploading frames to S3...')
       const printsPrefix = this.pathBuilder
         .videoPrint(
           videoId,
@@ -110,18 +119,29 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
         )
         .key.replace(/\/$/, '')
 
-      await processor.uploadDir(
+      const uploadResult = await processor.uploadDir(
         outputDir,
         this.outputBucket,
         printsPrefix,
         'frame_*.jpg',
       )
 
+      if (uploadResult.isFailure) {
+        await processor.cleanup()
+        return this.handleProcessingError(
+          uploadResult.error,
+          videoId,
+          segmentNumber,
+          correlationId,
+          userEmail,
+          videoName,
+        )
+      }
+
       const isLastSegment = this.checkAndUpdateProgress(
         videoId,
         segmentNumber,
         totalSegments,
-        correlationId,
       )
 
       if (isLastSegment) {
@@ -140,54 +160,69 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
           downloadUrl,
         )
 
-        this.deps.logger.log(`[PRINT] Video ${videoId} completed!`, {
-          correlationId,
-        })
+        this.deps.logger.log(`[PRINT] Video ${videoId} completed!`)
       }
 
       this.deps.logger.log(
         `[PRINT] Segment ${segmentNumber}/${totalSegments} complete`,
-        { correlationId },
       )
+
+      await processor.cleanup()
+      return Result.ok(undefined)
     } catch (error) {
-      this.deps.logger.error('[PRINT] Error processing segment', {
-        error: error instanceof Error ? error.message : String(error),
+      await processor.cleanup()
+      return this.handleProcessingError(
+        error instanceof Error ? error : new Error(String(error)),
         videoId,
         segmentNumber,
         correlationId,
-      })
-
-      const isNonRetryable = this.isNonRetryableError(
-        error instanceof Error ? error : new Error(String(error)),
+        userEmail,
+        videoName,
       )
-
-      if (isNonRetryable) {
-        await this.emitStatusEvent(
-          videoId,
-          'FAILED',
-          correlationId,
-          userEmail,
-          videoName,
-          undefined,
-          error instanceof Error ? error.message : String(error),
-        )
-      }
-
-      throw error
-    } finally {
-      await processor.cleanup()
     }
+  }
+
+  private async handleProcessingError(
+    error: Error,
+    videoId: string,
+    segmentNumber: number,
+    correlationId: string,
+    userEmail?: string,
+    videoName?: string,
+  ): Promise<Result<void, Error>> {
+    // correlationId is automatically included via Pino mixin
+    this.deps.logger.error('[PRINT] Error processing segment', {
+      error: error.message,
+      videoId,
+      segmentNumber,
+    })
+
+    const isNonRetryable = this.isNonRetryableError(error)
+
+    if (isNonRetryable) {
+      await this.emitStatusEvent(
+        videoId,
+        'FAILED',
+        correlationId,
+        userEmail,
+        videoName,
+        undefined,
+        error.message,
+      )
+      return Result.fail(new NonRetryableError(error.message))
+    }
+
+    return Result.fail(error)
   }
 
   private checkAndUpdateProgress(
     videoId: string,
     segmentNumber: number,
     totalSegments: number,
-    correlationId: string,
   ): boolean {
+    // correlationId is automatically included via Pino mixin
     this.deps.logger.log(
       `[PRINT] Segment ${segmentNumber}/${totalSegments} processed for video: ${videoId}`,
-      { correlationId },
     )
     return segmentNumber === totalSegments
   }
@@ -215,7 +250,7 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
     downloadUrl?: string,
     errorReason?: string,
   ): Promise<void> {
-    await this.deps.eventEmitter.emitVideoStatus({
+    await this.deps.eventEmitter.emitVideoStatusChanged({
       videoId,
       status,
       correlationId,
@@ -224,7 +259,8 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
       downloadUrl,
       errorReason,
     })
-    this.deps.logger.log(`[PRINT] Emitted event: ${status}`, { correlationId })
+    // correlationId is automatically included via Pino mixin
+    this.deps.logger.log(`[PRINT] Emitted event: ${status}`)
   }
 }
 

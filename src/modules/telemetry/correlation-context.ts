@@ -1,5 +1,6 @@
 import { Elysia } from 'elysia'
 import { trace, context } from '@opentelemetry/api'
+import { CorrelationStore } from '@core/libs/context'
 
 export interface RequestTracingContext {
   correlationId: string
@@ -57,6 +58,11 @@ export const correlationMiddleware = new Elysia({ name: 'correlation' })
       traceId,
       spanId,
     }
+
+    // Initialize AsyncLocalStorage context for automatic correlation propagation
+    // This allows all downstream code (logger, services, etc.) to access correlation data
+    // without explicit parameter passing
+    CorrelationStore.enterWith(tracingContext)
 
     return { tracingContext }
   })

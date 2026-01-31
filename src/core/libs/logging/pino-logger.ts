@@ -6,6 +6,7 @@ import {
   type LogLevel,
 } from '@core/libs/logging/abstract-logger'
 import { SensitiveDataMasker } from '@core/libs/logging/sensitive-masker'
+import { CorrelationStore } from '@core/libs/context'
 
 import { type Context, trace as otelTrace } from '@opentelemetry/api'
 import pino, { type Logger as PinoBaseLogger } from 'pino'
@@ -30,10 +31,19 @@ export class PinoLoggerService extends AbstractLoggerService<pino.Level> {
           error: pino.stdSerializers.err,
         },
         mixin: () => {
+          // Get correlation context from AsyncLocalStorage
+          const correlationCtx = CorrelationStore.getStore()
+
+          // Get OpenTelemetry context
           const span = otelTrace.getSpan(otelContext)
-          if (!span) return {}
-          const { traceId, spanId } = span.spanContext()
-          return { traceId, spanId }
+          const otelContext_ = span?.spanContext()
+
+          return {
+            // Prefer AsyncLocalStorage context, fallback to OpenTelemetry
+            correlationId: correlationCtx?.correlationId,
+            traceId: correlationCtx?.traceId ?? otelContext_?.traceId,
+            spanId: correlationCtx?.spanId ?? otelContext_?.spanId,
+          }
         },
         transport: this.resolveTransport(),
       })

@@ -1,5 +1,6 @@
 import { Result } from '@core/domain/result'
 import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import { CorrelationStore } from '@core/libs/context'
 import { VideoRepository } from '@modules/video-processor/domain/repositories/video.repository'
 import {
   createStoragePathBuilder,
@@ -51,10 +52,14 @@ export class CompleteMultipartHandler {
     const { key } = event.detail.object
     const { name: bucket } = event.detail.bucket
 
+    // Use CorrelationStore for correlationId if not explicitly passed
+    const effectiveCorrelationId =
+      correlationId ?? CorrelationStore.correlationId ?? crypto.randomUUID()
+
+    // correlationId is automatically included in logs via Pino mixin
     this.logger.log('Received S3 CompleteMultipartUpload event', {
       key,
       bucket,
-      correlationId,
     })
 
     const fullPath = `${bucket}/${key}`
@@ -64,7 +69,6 @@ export class CompleteMultipartHandler {
       this.logger.error('Invalid storage path format', {
         key,
         fullPath,
-        correlationId,
         event: JSON.stringify(event),
       })
       return Result.fail(new Error('Invalid storage path format'))
@@ -77,7 +81,6 @@ export class CompleteMultipartHandler {
       this.logger.error(`Video not found for reconciliation: ${videoId}`, {
         key,
         videoId,
-        correlationId,
         event: JSON.stringify(event),
       })
       return Result.fail(
@@ -92,7 +95,6 @@ export class CompleteMultipartHandler {
         'Video already uploaded/processing, skipping reconciliation',
         {
           videoId,
-          correlationId,
           event: JSON.stringify(event),
         },
       )
@@ -125,12 +127,10 @@ export class CompleteMultipartHandler {
       this.videoRepository.updateVideo(video),
     ])
 
-    this.logger.log('Video status updated to UPLOADED', {
-      videoId,
-      correlationId,
-    })
+    this.logger.log('Video status updated to UPLOADED', { videoId })
 
     // Emit UPLOADED event to trigger orchestrator-worker
+    // EventBridge payload requires explicit correlationId
     await this.eventBridgeClient.send(
       new PutEventsCommand({
         Entries: [
@@ -143,7 +143,7 @@ export class CompleteMultipartHandler {
               duration: video.metadata.durationMs,
               videoName: video.metadata.value.filename,
               status: 'UPLOADED',
-              correlationId: correlationId || crypto.randomUUID(),
+              correlationId: effectiveCorrelationId,
               timestamp: new Date().toISOString(),
             }),
           },
@@ -151,10 +151,7 @@ export class CompleteMultipartHandler {
       }),
     )
 
-    this.logger.log('Emitted UPLOADED event to EventBridge', {
-      videoId,
-      correlationId,
-    })
+    this.logger.log('Emitted UPLOADED event to EventBridge', { videoId })
 
     return Result.ok()
   }

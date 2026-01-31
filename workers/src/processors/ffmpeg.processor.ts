@@ -1,3 +1,4 @@
+import { Result } from '@core/domain/result'
 import type {
   VideoProcessorService,
   ExtractFramesResult,
@@ -25,7 +26,7 @@ export class FFmpegProcessor implements VideoProcessorService {
     startTime: number,
     endTime: number,
     frameInterval: number,
-  ): Promise<ExtractFramesResult> {
+  ): Promise<Result<ExtractFramesResult, Error>> {
     const outputDir = `${this.workDir}/frames`
 
     const mkdirProc = Bun.spawn(['mkdir', '-p', outputDir])
@@ -49,11 +50,10 @@ export class FFmpegProcessor implements VideoProcessorService {
 
     await proc.exited
 
-    const isError = proc.exitCode !== 0
-    if (isError) {
+    if (proc.exitCode !== 0) {
       const stderr = await new Response(proc.stderr).text()
-      throw new Error(
-        `FFmpeg failed with exit code ${proc.exitCode}: ${stderr}`,
+      return Result.fail(
+        new Error(`FFmpeg failed with exit code ${proc.exitCode}: ${stderr}`),
       )
     }
 
@@ -65,7 +65,7 @@ export class FFmpegProcessor implements VideoProcessorService {
     const output = await new Response(countProc.stdout).text()
     const count = parseInt(output.trim(), 10) || 0
 
-    return { outputDir, count }
+    return Result.ok({ outputDir, count })
   }
 
   async uploadDir(
@@ -73,7 +73,7 @@ export class FFmpegProcessor implements VideoProcessorService {
     bucket: string,
     prefix: string,
     pattern: string,
-  ): Promise<void> {
+  ): Promise<Result<void, Error>> {
     const endpoint = process.env.AWS_ENDPOINT_URL || ''
     const args = [
       'aws',
@@ -96,9 +96,13 @@ export class FFmpegProcessor implements VideoProcessorService {
 
     if (proc.exitCode !== 0) {
       const stderr = await new Response(proc.stderr).text()
-      throw new Error(
-        `S3 upload failed with exit code ${proc.exitCode}: ${stderr}`,
+      return Result.fail(
+        new Error(
+          `S3 upload failed with exit code ${proc.exitCode}: ${stderr}`,
+        ),
       )
     }
+
+    return Result.ok(undefined)
   }
 }

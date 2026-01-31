@@ -20,7 +20,9 @@ export interface SQSPublisherConfig {
   region?: string
 }
 
-export abstract class AbstractSQSPublisher<TPayload> extends AbstractQueuePublisher<TPayload> {
+export abstract class AbstractSQSPublisher<
+  TPayload,
+> extends AbstractQueuePublisher<TPayload> {
   protected readonly queueUrl: string
   private readonly sqsClient: SQSClient
   private readonly envelopeFactory: EnvelopeFactory
@@ -83,7 +85,9 @@ export abstract class AbstractSQSPublisher<TPayload> extends AbstractQueuePublis
         correlationId: options.correlationId,
         queue: this.maskQueueUrl(),
       })
-      return Result.fail(error instanceof Error ? error : new Error(String(error)))
+      return Result.fail(
+        error instanceof Error ? error : new Error(String(error)),
+      )
     }
   }
 
@@ -103,20 +107,22 @@ export abstract class AbstractSQSPublisher<TPayload> extends AbstractQueuePublis
       const chunks = this.chunkArray(payloads, 10)
 
       for (const chunk of chunks) {
-        const entries: SendMessageBatchRequestEntry[] = chunk.map((payload, index) => {
-          const envelope = this.envelopeFactory.createEnvelope(payload, {
-            correlationId: options.correlationId,
-            eventType: options.eventType,
-            source: options.source ?? this.source,
-            traceId: options.traceId,
-            spanId: options.spanId,
-          })
+        const entries: SendMessageBatchRequestEntry[] = chunk.map(
+          (payload, index) => {
+            const envelope = this.envelopeFactory.createEnvelope(payload, {
+              correlationId: options.correlationId,
+              eventType: options.eventType,
+              source: options.source ?? this.source,
+              traceId: options.traceId,
+              spanId: options.spanId,
+            })
 
-          return {
-            Id: `${index}-${envelope.metadata.messageId}`,
-            MessageBody: JSON.stringify(envelope),
-          }
-        })
+            return {
+              Id: `${index}-${envelope.metadata.messageId}`,
+              MessageBody: JSON.stringify(envelope),
+            }
+          },
+        )
 
         const response = await this.sqsClient.send(
           new SendMessageBatchCommand({
@@ -151,7 +157,9 @@ export abstract class AbstractSQSPublisher<TPayload> extends AbstractQueuePublis
         correlationId: options.correlationId,
         queue: this.maskQueueUrl(),
       })
-      return Result.fail(error instanceof Error ? error : new Error(String(error)))
+      return Result.fail(
+        error instanceof Error ? error : new Error(String(error)),
+      )
     }
   }
 

@@ -148,7 +148,9 @@ describe('AbstractSQSPublisher', () => {
   it('should return failure when batch has failed messages', async () => {
     sqsMock.on(SendMessageBatchCommand).resolves({
       Successful: [],
-      Failed: [{ Id: '0', SenderFault: true, Code: 'Error', Message: 'Failed' }],
+      Failed: [
+        { Id: '0', SenderFault: true, Code: 'Error', Message: 'Failed' },
+      ],
     })
 
     const publisher = createSQSPublisher<{ id: string }>(
@@ -156,10 +158,10 @@ describe('AbstractSQSPublisher', () => {
       logger,
     )
 
-    const result = await publisher.publishBatch(
-      [{ id: 'msg-1' }],
-      { eventType: 'test.event', correlationId: 'corr-123' },
-    )
+    const result = await publisher.publishBatch([{ id: 'msg-1' }], {
+      eventType: 'test.event',
+      correlationId: 'corr-123',
+    })
 
     expect(result.isFailure).toBe(true)
     expect(result.error?.message).toContain('Failed to publish 1 messages')
@@ -171,10 +173,10 @@ describe('AbstractSQSPublisher', () => {
       logger,
     )
 
-    const result = await publisher.publishBatch(
-      [],
-      { eventType: 'test.event', correlationId: 'corr-123' },
-    )
+    const result = await publisher.publishBatch([], {
+      eventType: 'test.event',
+      correlationId: 'corr-123',
+    })
 
     expect(result.isSuccess).toBe(true)
     expect(sqsMock.commandCalls(SendMessageBatchCommand).length).toBe(0)

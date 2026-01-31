@@ -100,10 +100,16 @@ export class Video extends AggregateRoot<Video> {
   }
 
   isFullyProcessed(): boolean {
-    return this._totalSegments > 0 && this._processedSegments >= this._totalSegments
+    return (
+      this._totalSegments > 0 && this._processedSegments >= this._totalSegments
+    )
   }
 
-  getProcessingProgress(): { total: number; processed: number; percentage: number } {
+  getProcessingProgress(): {
+    total: number
+    processed: number
+    percentage: number
+  } {
     return {
       total: this._totalSegments,
       processed: this._processedSegments,

@@ -1,10 +1,18 @@
 import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
-import type { MessageHandler, MessageContext, ParseResult } from '@core/messaging'
+import { CorrelationStore } from '@core/libs/context'
+import type {
+  MessageHandler,
+  MessageContext,
+  ParseResult,
+} from '@core/messaging'
 import {
   CompleteMultipartEventSchema,
   type CompleteMultipartEvent,
 } from '@core/messaging/schemas'
-import { createSQSConsumer, type AbstractSQSConsumer } from '@modules/messaging/sqs'
+import {
+  createSQSConsumer,
+  type AbstractSQSConsumer,
+} from '@modules/messaging/sqs'
 import { CompleteMultipartHandler } from './complete-multipart-handler'
 
 export class CompleteMultipartMessageHandler
@@ -27,14 +35,16 @@ export class CompleteMultipartMessageHandler
     event: CompleteMultipartEvent,
     context: MessageContext,
   ): Promise<void> {
+    // Get correlationId from AsyncLocalStorage (set by consumer)
+    // Fallback to message context for backwards compatibility
     const correlationId =
-      context.metadata?.correlationId ?? context.messageId ?? ''
+      CorrelationStore.correlationId ??
+      context.metadata?.correlationId ??
+      context.messageId ??
+      ''
 
-    this.logger.log('Handling S3 CompleteMultipartUpload event', {
-      event,
-      correlationId,
-      traceId: context.metadata?.traceId,
-    })
+    // correlationId is automatically included in logs via Pino mixin
+    this.logger.log('Handling S3 CompleteMultipartUpload event', { event })
 
     const result = await this.completeMultipartHandler.handle(
       event,
@@ -44,14 +54,12 @@ export class CompleteMultipartMessageHandler
     if (result.isFailure) {
       this.logger.log('CompleteMultipartHandler returned failure', {
         error: result.error?.message,
-        correlationId,
       })
       return
     }
 
     this.logger.log('S3 CompleteMultipartUpload event handled successfully', {
       event,
-      correlationId,
     })
   }
 }

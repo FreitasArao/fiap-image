@@ -126,7 +126,9 @@ describe('CompleteMultipartHandler', () => {
       })
 
       expect(mockEventBridge.calls.length).toBe(1)
-      const command = mockEventBridge.calls[0] as { input?: { Entries?: Array<{ Detail?: string }> } }
+      const command = mockEventBridge.calls[0] as {
+        input?: { Entries?: Array<{ Detail?: string }> }
+      }
       const detail = JSON.parse(command.input?.Entries?.[0]?.Detail || '{}')
       expect(detail.videoId).toBe(video.id.value)
       expect(detail.status).toBe('UPLOADED')

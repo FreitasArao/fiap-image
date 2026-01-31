@@ -1,3 +1,5 @@
+import { Result } from '@core/domain/result'
+
 export interface ExtractFramesResult {
   outputDir: string
   count: number
@@ -10,12 +12,12 @@ export interface VideoProcessorService {
     inputUrl: string,
     startTime: number,
     endTime: number,
-    frameInterval: number
-  ): Promise<ExtractFramesResult>
+    frameInterval: number,
+  ): Promise<Result<ExtractFramesResult, Error>>
   uploadDir(
     localDir: string,
     bucket: string,
     prefix: string,
-    pattern: string
-  ): Promise<void>
+    pattern: string,
+  ): Promise<Result<void, Error>>
 }

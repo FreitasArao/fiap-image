@@ -20,7 +20,7 @@ export interface TimeRange {
  */
 export function calculateTimeRanges(
   durationMs: number,
-  segmentDurationMs = 10000
+  segmentDurationMs = 10000,
 ): TimeRange[] {
   if (durationMs <= 0) {
     return []
@@ -50,7 +50,10 @@ export function calculateTimeRanges(
  * @param segmentDurationMs - Duration of each segment in milliseconds (default: 10000ms = 10s)
  * @returns Total number of segments
  */
-export function getTotalSegments(durationMs: number, segmentDurationMs = 10000): number {
+export function getTotalSegments(
+  durationMs: number,
+  segmentDurationMs = 10000,
+): number {
   if (durationMs <= 0) {
     return 0
   }

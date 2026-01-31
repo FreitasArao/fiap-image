@@ -44,9 +44,9 @@ describe('FFmpegProcessor', () => {
     })
   })
 
-  describe('extractFrames', () => {
+  describe('extractFramesFromUrl', () => {
     it.skipIf(!hasVideoFixture)(
-      'should extract at least 3 frames from url',
+      'should return success Result with frames from url',
       async () => {
         await processor.setup()
         const result = await processor.extractFramesFromUrl(
@@ -55,8 +55,10 @@ describe('FFmpegProcessor', () => {
           3,
           1,
         )
-        expect(result.count).toBeGreaterThanOrEqual(3)
-        expect(existsSync(result.outputDir)).toBe(true)
+
+        expect(result.isSuccess).toBe(true)
+        expect(result.value.count).toBeGreaterThanOrEqual(3)
+        expect(existsSync(result.value.outputDir)).toBe(true)
       },
     )
 
@@ -70,9 +72,51 @@ describe('FFmpegProcessor', () => {
           3,
           0.5,
         )
-        expect(result.count).toBeGreaterThanOrEqual(6)
-        expect(existsSync(result.outputDir)).toBe(true)
+
+        expect(result.isSuccess).toBe(true)
+        expect(result.value.count).toBeGreaterThanOrEqual(6)
+        expect(existsSync(result.value.outputDir)).toBe(true)
       },
     )
+
+    it('should return failure Result when input file does not exist', async () => {
+      await processor.setup()
+      const result = await processor.extractFramesFromUrl(
+        '/non/existent/file.mp4',
+        0,
+        10,
+        1,
+      )
+
+      expect(result.isFailure).toBe(true)
+      expect(result.error.message).toContain('FFmpeg failed')
+    })
+
+    it('should return failure Result when input URL is invalid', async () => {
+      await processor.setup()
+      const result = await processor.extractFramesFromUrl(
+        'not-a-valid-url',
+        0,
+        10,
+        1,
+      )
+
+      expect(result.isFailure).toBe(true)
+      expect(result.error.message).toContain('FFmpeg failed')
+    })
+  })
+
+  describe('uploadDir', () => {
+    it('should return failure Result when directory does not exist', async () => {
+      const result = await processor.uploadDir(
+        '/non/existent/dir',
+        'test-bucket',
+        'prefix',
+        '*.jpg',
+      )
+
+      expect(result.isFailure).toBe(true)
+      expect(result.error.message).toContain('S3 upload failed')
+    })
   })
 })
