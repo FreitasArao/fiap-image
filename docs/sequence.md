@@ -6,6 +6,7 @@ sequenceDiagram
     participant S3 as 🗄️ S3 Videos
     participant DB as 💾 ScyllaDB
     participant EB as 🔔 EventBridge
+    participant SNS as 📢 SNS Topics
     participant SQSo as 📨 SQS Orch
     participant SQSp as 📨 SQS Print
     participant Orch as 🔄 Orchestrator
@@ -13,6 +14,7 @@ sequenceDiagram
     participant W2 as ⚡ Worker 2
     participant WN as ⚡ Worker N
     participant S3F as 🖼️ S3 Frames
+    participant SQSn as 📨 SQS Notif
     participant SES as 📧 SES
 
     rect rgb(227, 242, 253)
@@ -60,13 +62,15 @@ sequenceDiagram
     end
 
     rect rgb(225, 245, 254)
-        Note over S3,SQSo: 5. EVENTO S3 → SQS → API CONSUMER
+        Note over S3,SQSo: 5. EVENTO S3 → SNS → SQS → API CONSUMER
         S3->>EB: Event: Object Created
-        EB->>SQSo: Enfileira (multipart-queue)
+        EB->>SNS: Publica (multipart-topic)
+        SNS->>SQSo: Entrega (multipart-queue)
         SQSo->>API: Poll (background consumer)
         API->>DB: UPDATE status = UPLOADED
         API->>EB: PutEvents (Status Changed: UPLOADED)
-        EB->>SQSo: Enfileira (orchestrator-queue)
+        EB->>SNS: Publica (uploaded-topic)
+        SNS->>SQSo: Entrega (orchestrator-queue)
     end
 
     rect rgb(237, 231, 246)
@@ -113,11 +117,13 @@ sequenceDiagram
     end
 
     rect rgb(251, 233, 231)
-        Note over EB,U: 8. NOTIFICAÇÃO FINAL (Zero Lambda)
-        EB->>SES: API Destination (COMPLETED)
+        Note over EB,U: 8. NOTIFICAÇÃO FINAL (SNS Fan-out)
+        EB->>SNS: Publica (notification-topic)
+        SNS->>SQSn: Entrega (notification-queue)
+        SQSn->>SES: Notification Worker consome
         SES->>SES: SendTemplatedEmail (VideoConcluido)
         SES-->>U: Email: "Seu vídeo está pronto!"
     end
 
-    Note over U,SES: ✅ FLUXO CONCLUÍDO<br/>Vídeo 100s com 10 workers:<br/>• Upload: ~2min<br/>• Orchestrator: ~1s<br/>• Print paralelo: ~30s (vs 5min sequencial)<br/>• Total: ~2.5min<br/><br/>🎯 Zero Lambda | Zero download completo<br/>💰 Custo: apenas tempo de execução
+    Note over U,SES: ✅ FLUXO CONCLUÍDO<br/>Vídeo 100s com 10 workers:<br/>• Upload: ~2min<br/>• Orchestrator: ~1s<br/>• Print paralelo: ~30s (vs 5min sequencial)<br/>• Total: ~2.5min<br/><br/>🎯 Zero Lambda | Zero download completo<br/>📢 Fan-out via SNS para resiliência<br/>💰 Custo: apenas tempo de execução
 ```

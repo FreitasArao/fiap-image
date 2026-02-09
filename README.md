@@ -40,56 +40,39 @@ Após completar o upload multipart no S3, o EventBridge enfileira a mensagem no 
 ```
 S3 CompleteMultipartUpload
        ↓
-   EventBridge
+   EventBridge (multipart-complete-rule)
        ↓
-   multipart-complete-queue (SQS)
+   SNS (multipart-complete-topic)
+       ↓
+   SQS (multipart-complete-queue)
        ↓
    API Consumer (background)
        ↓
    API atualiza DB + emite evento UPLOADED
        ↓
-   EventBridge → orchestrator-queue → orchestrator-worker
+   EventBridge → SNS (video-uploaded-topic) → SQS (orchestrator-queue)
+       ↓
+   Orchestrator Worker
 ```
 
-> **Nota**: Usamos SQS ao invés de API Destination para melhor resiliência e compatibilidade com LocalStack.
-
-#### Via cURL (Teste Manual)
-
-Para simular o webhook diretamente (alternativa para testes):
-
-```bash
-curl -X POST http://localhost:3002/videos/webhooks/s3/complete-multipart \
-  -H "Content-Type: application/json" \
-  -d '{
-    "bucket": "fiapx-video-parts",
-    "key": "<videoPath>/video.mp4"
-  }'
-```
-
-Exemplo com videoPath real:
-
-```bash
-curl -X POST http://localhost:3002/videos/webhooks/s3/complete-multipart \
-  -H "Content-Type: application/json" \
-  -d '{
-    "bucket": "fiapx-video-parts",
-    "key": "019bd312-78d9-7000-abe4-422208b52d7b/video.mp4"
-  }'
-```
-
-> **Nota:** O `videoId` é extraído do primeiro segmento do `key` (antes da `/`). Use o `videoPath` retornado na criação do vídeo.
+> **Nota**: Todos os eventos passam por SNS para fan-out e resiliência em camadas (EventBridge → SNS → SQS). Ver [ADR 014](docs/adrs/14.md).
 
 #### Via EventBridge (Simular evento S3)
 
-Emitir evento como se o S3 tivesse completado o multipart upload:
+Emitir evento como se o S3 tivesse completado o multipart upload.
+
+> **Importante**: Use o `object_key` do vídeo no Cassandra, não o `video_id`. O path S3 usa um ID de integração diferente do `video_id`. O vídeo deve estar em status `UPLOADING` para que a reconciliação funcione.
 
 ```bash
+# Consultar o object_key de um vídeo existente:
+# docker exec cassandra cqlsh -e "SELECT video_id, object_key, status FROM fiap_image.video;"
+
 aws --endpoint-url=http://localhost:4566 events put-events \
   --entries '[
     {
       "Source": "aws.s3",
       "DetailType": "Object Created",
-      "Detail": "{\"bucket\":{\"name\":\"fiapx-video-parts\"},\"object\":{\"key\":\"video/<VIDEO_ID>/file/video.mp4\"},\"reason\":\"CompleteMultipartUpload\"}"
+      "Detail": "{\"bucket\":{\"name\":\"fiapx-video-parts\"},\"object\":{\"key\":\"<OBJECT_KEY>\"},\"reason\":\"CompleteMultipartUpload\"}"
     }
   ]'
 ```

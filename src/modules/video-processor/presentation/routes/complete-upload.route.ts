@@ -1,7 +1,9 @@
+import { DefaultEventBridge } from '@core/events/event-bridge'
 import { BaseElysia } from '@core/libs/elysia'
 import { CompleteUploadUseCase } from '@modules/video-processor/application/complete-upload.use-case'
 import { VideoRepositoryImpl } from '@modules/video-processor/infra/repositories/video-repository-impl'
 import { UploadVideoParts } from '@modules/video-processor/infra/services/aws/s3/upload-video-parts'
+import { ReconcileUploadService } from '@modules/video-processor/domain/services/reconcile-upload.service'
 import { StatusMap, t } from 'elysia'
 
 export const completeUploadRoute = BaseElysia.create({ prefix: '' }).post(
@@ -10,9 +12,18 @@ export const completeUploadRoute = BaseElysia.create({ prefix: '' }).post(
     const { id: videoId } = params
     const { correlationId, traceId } = tracingContext
 
+    const videoRepository = new VideoRepositoryImpl(logger)
+    const eventBridge = new DefaultEventBridge(logger)
+    const reconcileService = new ReconcileUploadService(
+      logger,
+      videoRepository,
+      eventBridge,
+    )
+
     const useCase = new CompleteUploadUseCase(
-      new VideoRepositoryImpl(logger),
+      videoRepository,
       new UploadVideoParts(logger),
+      reconcileService,
     )
 
     const result = await useCase.execute({ videoId, correlationId, traceId })

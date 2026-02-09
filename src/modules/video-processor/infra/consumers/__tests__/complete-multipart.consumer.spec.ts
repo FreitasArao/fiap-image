@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test'
 import { Result } from '@core/domain/result'
 import { PinoLoggerService } from '@core/libs/logging/pino-logger'
+import { CorrelationStore } from '@core/libs/context'
 import { context } from '@opentelemetry/api'
 import { InMemoryVideoRepository } from '@modules/video-processor/__tests__/factories/in-memory-video.repository'
 import {
@@ -8,8 +9,17 @@ import {
   createCompleteMultipartConsumer,
 } from '@modules/video-processor/infra/consumers/complete-multipart.consumer'
 import { CompleteMultipartHandler } from '@modules/video-processor/infra/consumers/complete-multipart-handler'
+import { ReconcileUploadService } from '@modules/video-processor/domain/services/reconcile-upload.service'
+import { SqsUploadReconciler } from '@modules/video-processor/domain/services/sqs-upload-reconciler.service'
 import type { CompleteMultipartEvent } from '@core/messaging/schemas'
 import type { MessageContext } from '@core/messaging'
+
+function createMockEventBridge() {
+  return {
+    eventBusName: 'test-bus',
+    send: async () => Result.ok({ FailedEntryCount: 0 }),
+  }
+}
 
 function createMockHandler(): CompleteMultipartHandler {
   const mockLogger = new PinoLoggerService(
@@ -17,10 +27,25 @@ function createMockHandler(): CompleteMultipartHandler {
     context.active(),
   )
 
-  const handler = new CompleteMultipartHandler(
+  const videoRepository = new InMemoryVideoRepository()
+  const eventBridge = createMockEventBridge()
+  const reconcileService = new ReconcileUploadService(
     mockLogger,
-    new InMemoryVideoRepository(),
+    videoRepository,
+    eventBridge as unknown as Parameters<
+      typeof ReconcileUploadService.prototype.reconcile
+    >[0] extends { eventBridge: infer E }
+      ? E
+      : never,
   )
+
+  const sqsReconciler = new SqsUploadReconciler(
+    mockLogger,
+    videoRepository,
+    reconcileService,
+  )
+
+  const handler = new CompleteMultipartHandler(mockLogger, sqsReconciler)
 
   return handler
 }
@@ -50,12 +75,12 @@ describe('CompleteMultipartMessageHandler', () => {
 
       const result = messageHandler.parse(validPayload)
 
-      expect(result.success).toBe(true)
-      if (result.success) {
-        expect(result.data.detail.object.key).toBe(
+      expect(result.isSuccess).toBe(true)
+      if (result.isSuccess) {
+        expect(result.value.detail.object.key).toBe(
           'bucket/video/video-id/video.mp4',
         )
-        expect(result.data.detail.bucket.name).toBe('test-bucket')
+        expect(result.value.detail.bucket.name).toBe('test-bucket')
       }
     })
 
@@ -67,7 +92,7 @@ describe('CompleteMultipartMessageHandler', () => {
 
       const result = messageHandler.parse(invalidPayload)
 
-      expect(result.success).toBe(false)
+      expect(result.isFailure).toBe(true)
     })
 
     it('should parse payload with minimal required fields', () => {
@@ -81,9 +106,9 @@ describe('CompleteMultipartMessageHandler', () => {
 
       const result = messageHandler.parse(minimalPayload)
 
-      expect(result.success).toBe(true)
-      if (result.success) {
-        expect(result.data.detail.bucket.name).toBe('bucket')
+      expect(result.isSuccess).toBe(true)
+      if (result.isSuccess) {
+        expect(result.value.detail.bucket.name).toBe('bucket')
       }
     })
   })
@@ -97,61 +122,69 @@ describe('CompleteMultipartMessageHandler', () => {
       },
     })
 
-    const createContext = (correlationId?: string): MessageContext => ({
-      metadata: correlationId
-        ? {
-            messageId: 'msg-123',
-            correlationId,
-            traceId: 'trace-123',
-            spanId: 'span-123',
-            source: 'test',
-            eventType: 'video.multipart.complete',
-            version: '1.0',
-            timestamp: new Date().toISOString(),
-            retryCount: 0,
-            maxRetries: 3,
-          }
-        : null,
+    const createContext = (correlationId = 'default-corr'): MessageContext => ({
+      metadata: {
+        messageId: 'msg-123',
+        correlationId,
+        traceId: 'trace-123',
+        spanId: 'span-123',
+        source: 'test',
+        eventType: 'video.multipart.complete',
+        version: '1.0',
+        timestamp: new Date().toISOString(),
+        retryCount: 0,
+        maxRetries: 3,
+      },
       messageId: 'sqs-msg-123',
     })
 
-    it('should call innerHandler.handle with the event and correlationId', async () => {
+    it('should call innerHandler.handle with the event (correlationId is implicit via CorrelationStore)', async () => {
       const event = createS3Event('bucket/video/video-123/video.mp4')
       const msgContext = createContext('corr-456')
 
-      await messageHandler.handle(event, msgContext)
+      await CorrelationStore.run(
+        { correlationId: 'corr-456', traceId: 'trace-123' },
+        () => messageHandler.handle(event, msgContext),
+      )
 
       expect(handleSpy).toHaveBeenCalledTimes(1)
-      expect(handleSpy).toHaveBeenCalledWith(event, 'corr-456')
+      expect(handleSpy).toHaveBeenCalledWith(event)
     })
 
-    it('should use SQS messageId as correlationId when metadata is null', async () => {
+    it('should delegate to handler with default correlationId', async () => {
       const event = createS3Event('bucket/video/video-123/video.mp4')
-      const msgContext = createContext() // no correlationId in metadata
+      const msgContext = createContext()
 
-      await messageHandler.handle(event, msgContext)
+      await CorrelationStore.run(
+        { correlationId: 'default-corr' },
+        () => messageHandler.handle(event, msgContext),
+      )
 
-      expect(handleSpy).toHaveBeenCalledWith(event, 'sqs-msg-123')
+      expect(handleSpy).toHaveBeenCalledWith(event)
     })
 
-    it('should complete successfully when handler returns success', async () => {
+    it('should return success Result when handler returns success', async () => {
       handleSpy.mockResolvedValue(Result.ok())
       const event = createS3Event('bucket/video/video-123/video.mp4')
       const msgContext = createContext('corr-123')
 
-      await expect(
-        messageHandler.handle(event, msgContext),
-      ).resolves.toBeUndefined()
+      const result = await CorrelationStore.run(
+        { correlationId: 'corr-123' },
+        () => messageHandler.handle(event, msgContext),
+      )
+      expect(result.isSuccess).toBeTrue()
     })
 
-    it('should complete successfully even when handler returns failure', async () => {
+    it('should return failure Result when handler returns failure', async () => {
       handleSpy.mockResolvedValue(Result.fail(new Error('Handler error')))
       const event = createS3Event('bucket/video/video-123/video.mp4')
       const msgContext = createContext('corr-123')
 
-      await expect(
-        messageHandler.handle(event, msgContext),
-      ).resolves.toBeUndefined()
+      const result = await CorrelationStore.run(
+        { correlationId: 'corr-123' },
+        () => messageHandler.handle(event, msgContext),
+      )
+      expect(result.isFailure).toBeTrue()
     })
   })
 })

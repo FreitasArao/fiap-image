@@ -10,6 +10,9 @@ import {
   type VideoStatus,
 } from '@modules/video-processor/domain/value-objects/video-status.vo'
 import { VideoThirdPartyIntegrationsMetadataVO } from '@modules/video-processor/domain/value-objects/video-third-party-integrations-metadata.vo'
+import { VideoUploadedEvent } from '@modules/video-processor/events/video-uploaded-event'
+import { VideoPrintingEvent } from '@modules/video-processor/events/video-printing-event'
+import { VideoSplittingEvent } from '@modules/video-processor/events/video-splitting-event'
 
 export type UploadProgress = {
   totalParts: number
@@ -173,7 +176,11 @@ export class Video extends AggregateRoot<Video> {
   }
 
   completeUpload(): Result<this, InvalidStatusTransitionError> {
-    return this.transitionTo('UPLOADED')
+    const result = this.transitionTo('UPLOADED')
+    if (result.isFailure) return Result.fail(result.error)
+
+    this.addDomainEvent(new VideoUploadedEvent(this))
+    return Result.ok(this)
   }
 
   startProcessing(): Result<this, InvalidStatusTransitionError> {
@@ -181,7 +188,14 @@ export class Video extends AggregateRoot<Video> {
   }
 
   startSplitting(): Result<this, InvalidStatusTransitionError> {
-    return this.transitionTo('SPLITTING')
+    const transitionResult = this.transitionTo('SPLITTING')
+    if (transitionResult.isFailure) {
+      return Result.fail(transitionResult.error)
+    }
+
+    this.addDomainEvent(new VideoSplittingEvent(this))
+
+    return transitionResult
   }
 
   isUploading(): boolean {
@@ -189,7 +203,14 @@ export class Video extends AggregateRoot<Video> {
   }
 
   startPrinting(): Result<this, InvalidStatusTransitionError> {
-    return this.transitionTo('PRINTING')
+    const transitionResult = this.transitionTo('PRINTING')
+    if (transitionResult.isFailure) {
+      return Result.fail(transitionResult.error)
+    }
+
+    this.addDomainEvent(new VideoPrintingEvent(this))
+
+    return Result.ok(this)
   }
 
   markAsCompleted(): Result<this, InvalidStatusTransitionError> {

@@ -60,11 +60,12 @@ export abstract class AbstractSQSConsumer<TPayload> {
 
   private parseBody(body: string): {
     payload: unknown
-    metadata: EnvelopeMetadata | null
+    metadata: EnvelopeMetadata
   } {
     const parsed = JSON.parse(body)
-    const envelopeResult = GenericEnvelopeSchema.safeParse(parsed)
 
+    // Case 1: Direct envelope (from SQS publisher)
+    const envelopeResult = GenericEnvelopeSchema.safeParse(parsed)
     if (envelopeResult.success) {
       return {
         payload: envelopeResult.data.payload,
@@ -72,18 +73,33 @@ export abstract class AbstractSQSConsumer<TPayload> {
       }
     }
 
-    return { payload: parsed, metadata: null }
+    // Case 2: EventBridge event with envelope in detail (EventBridge → SNS → SQS RawMessageDelivery)
+    if (!parsed.detail || typeof parsed.detail !== 'object') {
+      throw new Error(
+        'Message is not in envelope format and has no EventBridge detail',
+      )
+    }
+
+    const detailEnvelope = GenericEnvelopeSchema.safeParse(parsed.detail)
+    if (!detailEnvelope.success) {
+      throw new Error('EventBridge detail is not in envelope format')
+    }
+
+    return {
+      payload: { ...parsed, detail: detailEnvelope.data.payload },
+      metadata: detailEnvelope.data.metadata,
+    }
   }
 
   private async processMessage(message: Message): Promise<Message | undefined> {
     const body = message.Body ?? '{}'
     const { payload, metadata } = this.parseBody(body)
 
-    // Extract correlation context from message metadata
+    // Extract correlation context from envelope metadata
     const correlationContext = {
-      correlationId: metadata?.correlationId ?? message.MessageId ?? '',
-      traceId: metadata?.traceId,
-      spanId: metadata?.spanId,
+      correlationId: metadata.correlationId ?? message.MessageId ?? '',
+      traceId: metadata.traceId,
+      spanId: metadata.spanId,
     }
 
     // Wrap entire message processing in correlation context
@@ -91,15 +107,13 @@ export abstract class AbstractSQSConsumer<TPayload> {
     return CorrelationStore.run(correlationContext, async () => {
       const context: MessageContext = {
         metadata,
-        sqsMessage: message,
         messageId: message.MessageId,
       }
 
       try {
         this.logger.log('Processing message', {
           messageId: message.MessageId,
-          eventType: metadata?.eventType,
-          isEnvelope: metadata !== null,
+          eventType: metadata.eventType,
         })
 
         const parseResult = this.handler.parse(payload)
@@ -108,7 +122,7 @@ export abstract class AbstractSQSConsumer<TPayload> {
           this.logger.warn('Payload validation failed', {
             error: parseResult.error.message,
             messageId: message.MessageId,
-            eventType: metadata?.eventType,
+            eventType: metadata.eventType,
           })
           // Non-retryable: remove from queue
           return message

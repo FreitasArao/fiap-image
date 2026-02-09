@@ -1,10 +1,5 @@
 import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
-import { CorrelationStore } from '@core/libs/context'
-import type {
-  MessageHandler,
-  MessageContext,
-  ParseResult,
-} from '@core/messaging'
+import type { MessageHandler, MessageContext } from '@core/messaging'
 import {
   CompleteMultipartEventSchema,
   type CompleteMultipartEvent,
@@ -14,6 +9,7 @@ import {
   type AbstractSQSConsumer,
 } from '@modules/messaging/sqs'
 import { CompleteMultipartHandler } from './complete-multipart-handler'
+import { Result } from '@core/domain/result'
 
 export class CompleteMultipartMessageHandler
   implements MessageHandler<CompleteMultipartEvent>
@@ -23,44 +19,34 @@ export class CompleteMultipartMessageHandler
     private readonly completeMultipartHandler: CompleteMultipartHandler,
   ) {}
 
-  parse(rawPayload: unknown): ParseResult<CompleteMultipartEvent> {
+  parse(rawPayload: unknown): Result<CompleteMultipartEvent, Error> {
     const result = CompleteMultipartEventSchema.safeParse(rawPayload)
     if (!result.success) {
-      return { success: false, error: result.error.message }
+      return Result.fail(new Error(result.error.message))
     }
-    return { success: true, data: result.data }
+    return Result.ok(result.data)
   }
 
   async handle(
     event: CompleteMultipartEvent,
-    context: MessageContext,
-  ): Promise<void> {
-    // Get correlationId from AsyncLocalStorage (set by consumer)
-    // Fallback to message context for backwards compatibility
-    const correlationId =
-      CorrelationStore.correlationId ??
-      context.metadata?.correlationId ??
-      context.messageId ??
-      ''
-
-    // correlationId is automatically included in logs via Pino mixin
+    _context: MessageContext,
+  ): Promise<Result<void, Error>> {
+    // correlationId is automatically propagated via CorrelationStore (set by AbstractSQSConsumer)
+    // and automatically included in all logs via Pino mixin - no manual passing needed
     this.logger.log('Handling S3 CompleteMultipartUpload event', { event })
 
-    const result = await this.completeMultipartHandler.handle(
-      event,
-      correlationId,
-    )
+    const result = await this.completeMultipartHandler.handle(event)
 
     if (result.isFailure) {
       this.logger.log('CompleteMultipartHandler returned failure', {
         error: result.error?.message,
       })
-      return
+      return Result.fail(result.error)
     }
 
-    this.logger.log('S3 CompleteMultipartUpload event handled successfully', {
-      event,
-    })
+    this.logger.log('S3 CompleteMultipartUpload event handled successfully')
+
+    return Result.ok()
   }
 }
 

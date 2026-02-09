@@ -1,15 +1,11 @@
 import { Result } from '@core/domain/result'
 import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 import { CorrelationStore } from '@core/libs/context'
-import { VideoRepository } from '@modules/video-processor/domain/repositories/video.repository'
 import {
   createStoragePathBuilder,
   StoragePathBuilder,
 } from '@modules/video-processor/infra/services/storage'
-import {
-  EventBridgeClient,
-  PutEventsCommand,
-} from '@aws-sdk/client-eventbridge'
+import { SqsUploadReconciler } from '@modules/video-processor/domain/services/sqs-upload-reconciler.service'
 
 export type CompleteMultipartEvent = {
   detail: {
@@ -23,38 +19,33 @@ export type CompleteMultipartEvent = {
   }
 }
 
-export interface EventBridgeEmitter {
-  send(command: PutEventsCommand): Promise<unknown>
-}
-
+/**
+ * CompleteMultipartHandler - Handles S3 CompleteMultipartUpload events from SQS.
+ *
+ * This handler is responsible for:
+ * 1. Parsing the S3 event to extract the video ID and object key
+ * 2. Delegating the SQS-specific reconciliation to SqsUploadReconciler
+ *
+ * The SqsUploadReconciler handles finding the video by objectKey, reconciling parts,
+ * and delegating to ReconcileUploadService for idempotent status transition.
+ */
 export class CompleteMultipartHandler {
   private readonly pathBuilder: StoragePathBuilder
-  private readonly eventBridgeClient: EventBridgeEmitter
 
   constructor(
     private readonly logger: AbstractLoggerService,
-    private readonly videoRepository: VideoRepository,
-    eventBridgeClient?: EventBridgeEmitter,
+    private readonly sqsReconciler: SqsUploadReconciler,
   ) {
     this.pathBuilder = createStoragePathBuilder()
-    this.eventBridgeClient =
-      eventBridgeClient ||
-      new EventBridgeClient({
-        region: process.env.AWS_REGION || 'us-east-1',
-        endpoint: process.env.AWS_ENDPOINT || process.env.AWS_ENDPOINT_URL,
-      })
   }
 
-  async handle(
-    event: CompleteMultipartEvent,
-    correlationId?: string,
-  ): Promise<Result<void, Error>> {
+  async handle(event: CompleteMultipartEvent): Promise<Result<void, Error>> {
     const { key } = event.detail.object
     const { name: bucket } = event.detail.bucket
 
-    // Use CorrelationStore for correlationId if not explicitly passed
-    const effectiveCorrelationId =
-      correlationId ?? CorrelationStore.correlationId ?? crypto.randomUUID()
+    // correlationId is obtained implicitly from CorrelationStore (set by SQS consumer)
+    // Fallback to a new UUID only if no context exists
+    const correlationId = CorrelationStore.correlationId ?? crypto.randomUUID()
 
     // correlationId is automatically included in logs via Pino mixin
     this.logger.log('Received S3 CompleteMultipartUpload event', {
@@ -62,6 +53,7 @@ export class CompleteMultipartHandler {
       bucket,
     })
 
+    // 1. Parse the storage path to extract videoId
     const fullPath = `${bucket}/${key}`
     const parsed = this.pathBuilder.parse(fullPath)
 
@@ -76,82 +68,35 @@ export class CompleteMultipartHandler {
 
     const { videoId } = parsed
 
-    const result = await this.videoRepository.findById(videoId)
-    if (result.isFailure || !result.value) {
-      this.logger.error(`Video not found for reconciliation: ${videoId}`, {
-        key,
+    const reconcileResult = await this.sqsReconciler.execute({
+      videoId,
+      objectKey: key,
+      correlationId,
+    })
+
+    if (reconcileResult.isFailure) {
+      this.logger.error('Reconciliation failed', {
         videoId,
-        event: JSON.stringify(event),
+        error: reconcileResult.error,
       })
-      return Result.fail(
-        new Error(`Video not found for reconciliation: ${videoId}`),
-      )
+      return Result.fail(reconcileResult.error)
     }
 
-    const video = result.value
+    const result = reconcileResult.value
 
-    if (video.isAlreadyUploaded()) {
-      this.logger.log(
-        'Video already uploaded/processing, skipping reconciliation',
-        {
-          videoId,
-          event: JSON.stringify(event),
-        },
-      )
-      return Result.fail(
-        new Error('Video already uploaded/processing, skipping reconciliation'),
-      )
+    if (result.skipped) {
+      this.logger.log('Reconciliation skipped (idempotent)', {
+        videoId,
+        reason: result.reason,
+      })
+      // Return success even if skipped - this is expected for idempotent processing
+      return Result.ok()
     }
 
-    video.reconcileAllPartsAsUploaded()
-    const transitionResult = video.completeUpload()
-
-    if (transitionResult.isFailure) {
-      this.logger.error(
-        'Failed to transition video status during reconciliation',
-        {
-          videoId,
-          currentStatus: video.status.value,
-          error: transitionResult.error,
-        },
-      )
-      return Result.fail(
-        new Error('Failed to transition video status during reconciliation'),
-      )
-    }
-
-    await Promise.all([
-      ...video.parts.map((part) =>
-        this.videoRepository.updateVideoPart(video, part.partNumber),
-      ),
-      this.videoRepository.updateVideo(video),
-    ])
-
-    this.logger.log('Video status updated to UPLOADED', { videoId })
-
-    // Emit UPLOADED event to trigger orchestrator-worker
-    // EventBridge payload requires explicit correlationId
-    await this.eventBridgeClient.send(
-      new PutEventsCommand({
-        Entries: [
-          {
-            Source: 'fiapx.video',
-            DetailType: 'Video Status Changed',
-            Detail: JSON.stringify({
-              videoId,
-              videoPath: video.thirdPartyVideoIntegration?.path || videoId,
-              duration: video.metadata.durationMs,
-              videoName: video.metadata.value.filename,
-              status: 'UPLOADED',
-              correlationId: effectiveCorrelationId,
-              timestamp: new Date().toISOString(),
-            }),
-          },
-        ],
-      }),
-    )
-
-    this.logger.log('Emitted UPLOADED event to EventBridge', { videoId })
+    this.logger.log('Reconciliation completed successfully', {
+      videoId,
+      status: result.status,
+    })
 
     return Result.ok()
   }

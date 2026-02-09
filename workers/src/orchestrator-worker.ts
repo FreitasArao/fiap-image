@@ -12,7 +12,11 @@ import {
   createSQSPublisher,
   type AbstractSQSPublisher,
 } from '@modules/messaging/sqs'
-import type { MessageHandler, MessageContext } from '@core/messaging'
+import {
+  type MessageHandler,
+  type MessageContext,
+  type PublishOptions,
+} from '@core/messaging'
 import {
   VideoEventSchema,
   VIDEO_EVENT_TYPES,
@@ -20,22 +24,30 @@ import {
   type SegmentMessage,
 } from '@core/messaging/schemas'
 import { Result } from '@core/domain/result'
-import type { EventBusEmitter } from '@core/abstractions/messaging'
+
 import { calculateTimeRanges, getTotalSegments } from './time-range'
 import { generatePresignedUrl } from './s3-presign.service'
 import { NonRetryableError } from '@core/errors/non-retryable.error'
 import { EventBridgeEmitter } from './adapters'
+import type { EventBusEmitter } from '@core/abstractions/messaging'
 
 /** Default segment duration: 10 seconds */
 const DEFAULT_SEGMENT_DURATION_MS = 10_000
 
-export interface OrchestratorWorkerDeps {
+export type OrchestratorWorkerDeps = {
   logger: AbstractLoggerService
   eventEmitter: EventBusEmitter
   printQueuePublisher: AbstractSQSPublisher<SegmentMessage>
   pathBuilder?: StoragePathBuilder
 }
 
+/**
+ * VideoEventHandler - Processes video events and fans out segment messages.
+ *
+ * All correlation context (correlationId, traceId, spanId) is automatically
+ * propagated via CorrelationStore (AsyncLocalStorage), set by the SQS consumer.
+ * Logs automatically include these fields via the Pino mixin.
+ */
 export class VideoEventHandler implements MessageHandler<VideoEvent> {
   private readonly pathBuilder: StoragePathBuilder
 
@@ -53,21 +65,18 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
 
   async handle(
     event: VideoEvent,
-    context: MessageContext,
+    _context: MessageContext,
   ): Promise<Result<void, Error>> {
     const { videoId, videoPath, duration, userEmail, videoName } = event.detail
 
+    // correlationId is automatically injected by Pino mixin via CorrelationStore
+    // Obtain explicit values only for downstream propagation (e.g. publishing to SQS/EventBridge)
     const correlationId =
       CorrelationStore.correlationId ??
-      context.metadata?.correlationId ??
       event.detail.correlationId ??
-      context.messageId ??
-      ''
+      crypto.randomUUID()
     const traceId =
-      CorrelationStore.traceId ??
-      context.metadata?.traceId ??
-      event.detail.traceId
-    const spanId = CorrelationStore.spanId ?? context.metadata?.spanId
+      CorrelationStore.traceId ?? event.detail.traceId
 
     this.deps.logger.log('[ORCHESTRATOR] Processing video', { videoId })
 
@@ -123,14 +132,17 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
       videoName,
     }))
 
+    // Publish segment messages using the Envelope pattern via SQS publisher
+    const publishOptions: PublishOptions = {
+      correlationId,
+      eventType: VIDEO_EVENT_TYPES.SEGMENT_PRINT,
+      source: 'fiapx.orchestrator',
+      traceId,
+    }
+
     const publishResult = await this.deps.printQueuePublisher.publishBatch(
       messages,
-      {
-        eventType: VIDEO_EVENT_TYPES.SEGMENT_PRINT,
-        correlationId,
-        traceId,
-        spanId,
-      },
+      publishOptions,
     )
 
     if (publishResult.isFailure) {
@@ -141,6 +153,7 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
       )
     }
 
+    // Emit status change event via EventBridge (also uses Envelope pattern internally)
     await this.deps.eventEmitter.emitVideoStatusChanged({
       videoId,
       status: 'PROCESSING',
@@ -151,7 +164,7 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
     })
 
     this.deps.logger.log(
-      `[ORCHESTRATOR] Published ${messages.length} messages to print queue`,
+      `[ORCHESTRATOR] Published ${messages.length} segment messages`,
     )
 
     return Result.ok(undefined)

@@ -6,6 +6,7 @@ import {
 } from '@aws-sdk/client-eventbridge'
 import { EventBridgeEmitter } from '@workers/adapters/eventbridge-emitter'
 import type { VideoStatusChangedEvent } from '@core/abstractions/messaging'
+import { CorrelationStore } from '@core/libs/context'
 
 const eventBridgeMock = mockClient(EventBridgeClient)
 
@@ -23,6 +24,17 @@ describe('EventBridgeEmitter', () => {
     eventBridgeMock.reset()
   })
 
+  /**
+   * Helper: parse the envelope from the PutEventsCommand Detail field.
+   * The emitter now wraps event data in an envelope: { metadata, payload }.
+   */
+  function getEnvelopeFromCall(callIndex = 0) {
+    const calls = eventBridgeMock.commandCalls(PutEventsCommand)
+    const entry = calls[callIndex].args[0].input.Entries?.[0]
+    const envelope = JSON.parse(entry?.Detail ?? '{}')
+    return { entry, envelope, payload: envelope.payload, metadata: envelope.metadata }
+  }
+
   describe('emitVideoStatusChanged', () => {
     it('should emit event with required fields', async () => {
       eventBridgeMock.on(PutEventsCommand).resolves({})
@@ -33,54 +45,59 @@ describe('EventBridgeEmitter', () => {
         correlationId: 'corr-123',
       }
 
-      await emitter.emitVideoStatusChanged(event)
+      await CorrelationStore.run(
+        { correlationId: 'corr-123', traceId: 'trace-123' },
+        () => emitter.emitVideoStatusChanged(event),
+      )
 
       const calls = eventBridgeMock.commandCalls(PutEventsCommand)
       expect(calls.length).toBe(1)
 
-      const entry = calls[0].args[0].input.Entries?.[0]
+      const { entry, payload, metadata } = getEnvelopeFromCall()
       expect(entry?.Source).toBe('fiapx.video')
       expect(entry?.DetailType).toBe('Video Status Changed')
 
-      const detail = JSON.parse(entry?.Detail ?? '{}')
-      expect(detail.videoId).toBe('video-123')
-      expect(detail.status).toBe('COMPLETED')
-      expect(detail.correlationId).toBe('corr-123')
-      expect(detail.timestamp).toBeDefined()
+      expect(payload.videoId).toBe('video-123')
+      expect(payload.status).toBe('COMPLETED')
+      expect(payload.correlationId).toBe('corr-123')
+      expect(payload.timestamp).toBeDefined()
+      expect(metadata.correlationId).toBe('corr-123')
     })
 
     it('should emit PROCESSING status', async () => {
       eventBridgeMock.on(PutEventsCommand).resolves({})
 
-      await emitter.emitVideoStatusChanged({
-        videoId: 'video-123',
-        status: 'PROCESSING',
-        correlationId: 'corr-123',
-      })
-
-      const calls = eventBridgeMock.commandCalls(PutEventsCommand)
-      const detail = JSON.parse(
-        calls[0].args[0].input.Entries?.[0]?.Detail ?? '{}',
+      await CorrelationStore.run(
+        { correlationId: 'corr-123' },
+        () =>
+          emitter.emitVideoStatusChanged({
+            videoId: 'video-123',
+            status: 'PROCESSING',
+            correlationId: 'corr-123',
+          }),
       )
-      expect(detail.status).toBe('PROCESSING')
+
+      const { payload } = getEnvelopeFromCall()
+      expect(payload.status).toBe('PROCESSING')
     })
 
     it('should emit FAILED status with errorReason', async () => {
       eventBridgeMock.on(PutEventsCommand).resolves({})
 
-      await emitter.emitVideoStatusChanged({
-        videoId: 'video-123',
-        status: 'FAILED',
-        correlationId: 'corr-123',
-        errorReason: 'Video file not found',
-      })
-
-      const calls = eventBridgeMock.commandCalls(PutEventsCommand)
-      const detail = JSON.parse(
-        calls[0].args[0].input.Entries?.[0]?.Detail ?? '{}',
+      await CorrelationStore.run(
+        { correlationId: 'corr-123' },
+        () =>
+          emitter.emitVideoStatusChanged({
+            videoId: 'video-123',
+            status: 'FAILED',
+            correlationId: 'corr-123',
+            errorReason: 'Video file not found',
+          }),
       )
-      expect(detail.status).toBe('FAILED')
-      expect(detail.errorReason).toBe('Video file not found')
+
+      const { payload } = getEnvelopeFromCall()
+      expect(payload.status).toBe('FAILED')
+      expect(payload.errorReason).toBe('Video file not found')
     })
 
     it('should include all optional fields when provided', async () => {
@@ -99,20 +116,20 @@ describe('EventBridgeEmitter', () => {
         traceId: 'trace-abc',
       }
 
-      await emitter.emitVideoStatusChanged(event)
-
-      const calls = eventBridgeMock.commandCalls(PutEventsCommand)
-      const detail = JSON.parse(
-        calls[0].args[0].input.Entries?.[0]?.Detail ?? '{}',
+      await CorrelationStore.run(
+        { correlationId: 'corr-123', traceId: 'trace-abc' },
+        () => emitter.emitVideoStatusChanged(event),
       )
 
-      expect(detail.userEmail).toBe('user@example.com')
-      expect(detail.videoName).toBe('my-video.mp4')
-      expect(detail.videoPath).toBe('bucket/video/123/file/video.mp4')
-      expect(detail.duration).toBe(120000)
-      expect(detail.downloadUrl).toBe('https://example.com/download/video.zip')
-      expect(detail.traceId).toBe('trace-abc')
-      expect(detail.timestamp).toBe('2024-01-15T10:30:00.000Z')
+      const { payload, metadata } = getEnvelopeFromCall()
+
+      expect(payload.userEmail).toBe('user@example.com')
+      expect(payload.videoName).toBe('my-video.mp4')
+      expect(payload.videoPath).toBe('bucket/video/123/file/video.mp4')
+      expect(payload.duration).toBe(120000)
+      expect(payload.downloadUrl).toBe('https://example.com/download/video.zip')
+      expect(payload.timestamp).toBe('2024-01-15T10:30:00.000Z')
+      expect(metadata.traceId).toBe('trace-abc')
     })
 
     it('should use current timestamp when not provided', async () => {
@@ -120,21 +137,22 @@ describe('EventBridgeEmitter', () => {
 
       const before = new Date().toISOString()
 
-      await emitter.emitVideoStatusChanged({
-        videoId: 'video-123',
-        status: 'COMPLETED',
-        correlationId: 'corr-123',
-      })
+      await CorrelationStore.run(
+        { correlationId: 'corr-123' },
+        () =>
+          emitter.emitVideoStatusChanged({
+            videoId: 'video-123',
+            status: 'COMPLETED',
+            correlationId: 'corr-123',
+          }),
+      )
 
       const after = new Date().toISOString()
 
-      const calls = eventBridgeMock.commandCalls(PutEventsCommand)
-      const detail = JSON.parse(
-        calls[0].args[0].input.Entries?.[0]?.Detail ?? '{}',
-      )
+      const { payload } = getEnvelopeFromCall()
 
-      expect(detail.timestamp >= before).toBe(true)
-      expect(detail.timestamp <= after).toBe(true)
+      expect(payload.timestamp >= before).toBe(true)
+      expect(payload.timestamp <= after).toBe(true)
     })
   })
 })

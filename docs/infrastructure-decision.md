@@ -194,28 +194,29 @@ S3 Event → Lambda → API Call
 - **Código para manter**: mais uma função para versionar/deploy
 - **Limites de concorrência**: 1000 execuções simultâneas por padrão
 
-### Arquitetura com EventBridge + API Destination
+### Arquitetura com EventBridge + SNS + SQS (Fan-out)
 
 ```
-S3 Event → EventBridge → API Destination (HTTP direto)
+S3 Event → EventBridge → SNS Topic → SQS Queue → Consumer
 ```
 
 **Vantagens:**
 - **Zero Cold Start**: não há runtime para inicializar
-- **Custo por evento**: apenas $1/milhão de eventos
-- **Zero código**: configuração declarativa
-- **Sem limites**: escala automaticamente
+- **Fan-out nativo**: SNS distribui para múltiplos subscribers
+- **Resiliência em camadas**: EventBridge → SNS → SQS → DLQ
+- **Extensibilidade**: novos consumers sem alterar EventBridge
+- **Custo quase zero**: SNS entrega para SQS é grátis
 
 ### Comparativo de Performance
 
-| Métrica | Lambda | EventBridge + API Destination |
-|---------|--------|-------------------------------|
+| Métrica | Lambda | EventBridge + SNS + SQS |
+|---------|--------|--------------------------|
 | **Cold Start** | 100ms - 3s (Java/Python) | 0ms (sem runtime) |
-| **Latência média** | 50-200ms | 20-50ms |
-| **Latência p99** | 500ms - 3s | 100ms |
-| **Timeout máximo** | 15 minutos | Configurável (até 30s HTTP) |
-| **Concurrency** | 1000 default (soft limit) | Ilimitado |
-| **Retry automático** | Configurável | Built-in (exponential backoff) |
+| **Latência média** | 50-200ms | 25-60ms |
+| **Latência p99** | 500ms - 3s | 150ms |
+| **Fan-out** | Manual | Nativo (SNS) |
+| **Retry** | Configurável | 3 camadas (EB + SNS + SQS) |
+| **Extensibilidade** | Baixa | Alta (novas subscriptions) |
 
 ### Comparativo de Custos
 
@@ -261,17 +262,17 @@ Cenário: Cliente crashou após upload mas antes de reportar
 └─ API reconcilia: marca TUDO como UPLOADED e inicia processamento ✓
 ```
 
-### Vantagens Adicionais do EventBridge
+### Vantagens Adicionais do EventBridge + SNS
 
 | Vantagem | Descrição |
 |----------|-----------|
-| **Zero Código** | Não precisa escrever/manter Lambda |
+| **Fan-out nativo** | SNS distribui para múltiplos consumers |
 | **Schema Registry** | Validação automática de eventos |
 | **Archive & Replay** | Re-processar eventos históricos |
 | **Cross-Account** | Enviar eventos entre contas AWS |
 | **SaaS Integration** | Integração nativa com Datadog, Zendesk, etc |
-| **Dead Letter Queue** | Built-in para eventos com falha |
-| **Rate Limiting** | Controle de taxa no API Destination |
+| **Dead Letter Queue** | Built-in em EventBridge, SNS e SQS |
+| **Extensibilidade** | Novos subscribers sem alterar EventBridge |
 
 ---
 
@@ -690,14 +691,14 @@ pie title Economia Anual por Componente ($18,048 total)
 
 ### Decisão Arquitetural
 
-A arquitetura final adota **EventBridge + SQS + KEDA Workers** como solução híbrida:
+A arquitetura final adota **EventBridge + SNS + SQS + KEDA Workers** como solução:
 
 | Componente | Solução | Justificativa |
 |------------|---------|---------------|
 | **Monitoramento de Upload** | Cliente reporta via API | S3 NÃO emite eventos para UploadPart |
-| **Detecção de Conclusão** | EventBridge (CompleteMultipartUpload) | Único evento disponível para multipart |
-| **Processamento Split/Print** | SQS + KEDA Worker + K8s Jobs | Sem limite de tempo, FFmpeg CLI |
-| **Notificações** | SNS + Lambda | Event-driven, 128MB ARM, ~200ms |
+| **Detecção de Conclusão** | EventBridge → SNS → SQS | Fan-out nativo, resiliência em camadas |
+| **Processamento Split/Print** | SNS → SQS + KEDA Worker + K8s Jobs | Sem limite de tempo, FFmpeg CLI |
+| **Notificações** | EventBridge → SNS → SQS → Notification Worker | Event-driven, fan-out, extensível |
 
 ### Limitação Importante do S3
 
@@ -723,11 +724,14 @@ Cliente → S3 (PUT parte) → Cliente recebe ETag
                                   ↓
                              Cassandra
 
-Conclusão do Upload (EventBridge):
-S3 (CompleteMultipartUpload) → EventBridge → SQS → KEDA Worker → FFmpeg Job
+Conclusão do Upload (EventBridge → SNS → SQS):
+S3 (CompleteMultipartUpload) → EventBridge → SNS → SQS → API Consumer
 
-Frames salvos (EventBridge):
-S3 (PutObject frames) → EventBridge → SNS → Lambda (Email/SMS)
+Orquestração (EventBridge → SNS → SQS):
+API emite UPLOADED → EventBridge → SNS → SQS → Orchestrator Worker
+
+Notificações (EventBridge → SNS → SQS):
+Workers emitem PROCESSING/COMPLETED/FAILED → EventBridge → SNS → SQS → Notification Worker → SES
 ```
 
 ### Geração Progressiva de URLs (ADR 006)
@@ -757,8 +761,17 @@ URLs pré-assinadas geradas em batches de 20 sob demanda:
 |---------|-------|
 | Custom Events | $1.00/milhão |
 | Partner Events | $1.00/milhão |
-| API Destination | $0.20/milhão |
 | Schema Discovery | $0.10/milhão (após 5M free) |
+
+### SNS (Standard Topics)
+
+| Recurso | Preço |
+|---------|-------|
+| Publicações | $0.50/milhão (primeiro 1M grátis) |
+| Entregas para SQS | **Grátis** |
+| Entregas para Lambda | **Grátis** |
+| Entregas para HTTP/S | $0.60/milhão |
+| Data Transfer (mesma região) | **Grátis** |
 
 ### SQS
 
@@ -802,11 +815,11 @@ URLs pré-assinadas geradas em batches de 20 sob demanda:
 | Componente | Uso | Custo Mensal |
 |------------|-----|--------------|
 | **EventBridge Events** | 1M eventos | $1.00 |
-| **EventBridge API Destination** | 1M chamadas | $0.20 |
-| **SQS (Split + Print)** | 50k mensagens | $0.02 |
+| **SNS (publicações)** | ~50k publicações | $0.00 (free tier) |
+| **SNS → SQS (entregas)** | ~50k entregas | $0.00 (grátis) |
+| **SQS (todas as filas)** | 50k mensagens | $0.02 |
 | **SQS DLQ** | 1k mensagens | $0.00 |
 | **KEDA Workers (FFmpeg)** | 55h compute | $3.80 |
-| **Lambda (Email/SMS)** | 20k invocações | $0.50 |
 | **S3 Requests** | 1M PUT + GET | $5.00 |
 | **S3 Storage** | 10TB | $230.00 |
 | **Cassandra (3 nodes)** | m5.xlarge | $400.00 |
@@ -832,7 +845,8 @@ URLs pré-assinadas geradas em batches de 20 sob demanda:
 - [S3 Presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html)
 - [S3 Event Notifications to EventBridge](https://docs.aws.amazon.com/AmazonS3/latest/userguide/EventBridge.html)
 - [EventBridge S3 Event Mapping](https://docs.aws.amazon.com/AmazonS3/latest/userguide/ev-mapping-troubleshooting.html)
-- [EventBridge API Destinations](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-api-destinations.html)
+- [SNS Fan-out to SQS](https://docs.aws.amazon.com/sns/latest/dg/sns-sqs-as-subscriber.html)
+- [SNS Raw Message Delivery](https://docs.aws.amazon.com/sns/latest/dg/sns-large-payload-raw-message-delivery.html)
 - [SQS Developer Guide](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/welcome.html)
 - [Lambda with SQS](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html)
 

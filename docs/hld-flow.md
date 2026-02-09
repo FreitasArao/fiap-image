@@ -53,15 +53,17 @@ graph TB
         API5 -->|"CompleteMultipartUpload"| S3_5
     end
 
-    subgraph FASE6["🔔 FASE 6 - Processamento de Evento S3 via SQS"]
+    subgraph FASE6["🔔 FASE 6 - Processamento de Evento S3 via SNS/SQS"]
         S3_6[S3 Videos<br/>Bucket]
         EB6[EventBridge]
+        SNS6[SNS multipart<br/>topic]
         SQS6[SQS Multipart<br/>Queue]
         API6[API Consumer<br/>Elysia]
         DB6[(ScyllaDB)]
 
         S3_6 -->|"7. Event: Object Created"| EB6
-        EB6 -->|"Enfileira"| SQS6
+        EB6 -->|"Publica"| SNS6
+        SNS6 -->|"Entrega"| SQS6
         SQS6 -->|"Poll"| API6
         API6 -->|"Status: UPLOADED"| DB6
     end
@@ -69,10 +71,12 @@ graph TB
     subgraph FASE7["🎯 FASE 7 - Enfileiramento para Orquestração"]
         API7[API Consumer<br/>Elysia]
         EB7[EventBridge]
+        SNS7[SNS uploaded<br/>topic]
         SQS7[SQS Orchestrator<br/>Queue]
 
         API7 -->|"8. Publica Status Changed"| EB7
-        EB7 -->|"Roteia evento"| SQS7
+        EB7 -->|"Publica"| SNS7
+        SNS7 -->|"Entrega"| SQS7
     end
 
     subgraph FASE8["🔄 FASE 8 - Orchestrator (Fan-out)"]
@@ -104,11 +108,17 @@ graph TB
     subgraph FASE10["📧 FASE 10 - Notificação Final"]
         JOB10[Bun Job<br/>Print Worker]
         EB10[EventBridge]
+        SNS10[SNS notification<br/>topic]
+        SQS10[SQS notification<br/>queue]
+        NW10[Notification<br/>Worker]
         SES10[AWS SES<br/>Email Service]
         U10[👤 Usuário]
 
         JOB10 -->|"12. Status Changed<br/>(último frame)"| EB10
-        EB10 -->|"API Destination"| SES10
+        EB10 -->|"Publica"| SNS10
+        SNS10 -->|"Entrega"| SQS10
+        SQS10 -->|"Poll"| NW10
+        NW10 -->|"SendEmail"| SES10
         SES10 -->|"Email: Processamento Concluído"| U10
     end
 

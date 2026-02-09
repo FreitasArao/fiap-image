@@ -4,7 +4,7 @@ services:
     ports:
       - "4566:4566"
     environment:
-      - SERVICES=s3,events,sqs,ses
+      - SERVICES=s3,events,sqs,sns,ses
       - AWS_DEFAULT_REGION=us-east-1
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
@@ -36,6 +36,9 @@ services:
       - |
         set -e
 
+        # ============================================
+        # S3 BUCKETS
+        # ============================================
         echo "=== Criando buckets ==="
         aws --endpoint-url=http://localstack:4566 s3 mb s3://fiapx-video-parts || true
         aws --endpoint-url=http://localstack:4566 s3 mb s3://fiapx-video-frames || true
@@ -74,8 +77,20 @@ services:
           --bucket fiapx-video-parts \
           --notification-configuration '{ "EventBridgeConfiguration": {} }'
 
+        # ============================================
+        # SQS QUEUES
+        # ============================================
+        echo "=== Criando filas SQS ==="
 
-        # Fila para orquestração (calcula segmentos e despacha para print-queue)
+        # Fila para eventos S3 CompleteMultipartUpload
+        aws --endpoint-url=http://localstack:4566 sqs create-queue \
+          --queue-name multipart-complete-queue \
+          --attributes '{
+            "VisibilityTimeout": "120",
+            "MessageRetentionPeriod": "86400"
+          }'
+
+        # Fila para orquestracao (calcula segmentos e despacha para print-queue)
         aws --endpoint-url=http://localstack:4566 sqs create-queue \
           --queue-name orchestrator-queue \
           --attributes '{
@@ -91,27 +106,87 @@ services:
             "MessageRetentionPeriod": "86400"
           }'
 
+        # Fila para notificacoes (e-mail via SES)
+        aws --endpoint-url=http://localstack:4566 sqs create-queue \
+          --queue-name notification-queue \
+          --attributes '{
+            "VisibilityTimeout": "60",
+            "MessageRetentionPeriod": "86400"
+          }'
+
         # DLQ para mensagens com falha
         aws --endpoint-url=http://localstack:4566 sqs create-queue \
           --queue-name processing-dlq
 
-        echo "=== Configurando permissao das filas para EventBridge ==="
+        # ============================================
+        # SNS TOPICS (Fan-out: EventBridge -> SNS -> SQS)
+        # ============================================
+        echo "=== Criando topicos SNS ==="
+
+        aws --endpoint-url=http://localstack:4566 sns create-topic \
+          --name multipart-complete-topic
+
+        aws --endpoint-url=http://localstack:4566 sns create-topic \
+          --name video-uploaded-topic
+
+        aws --endpoint-url=http://localstack:4566 sns create-topic \
+          --name video-notification-topic
+
+        # ============================================
+        # SNS -> SQS SUBSCRIPTIONS (Raw Message Delivery)
+        # ============================================
+        echo "=== Criando subscriptions SNS -> SQS ==="
+
+        # multipart-complete-topic -> multipart-complete-queue
+        aws --endpoint-url=http://localstack:4566 sns subscribe \
+          --topic-arn arn:aws:sns:us-east-1:000000000000:multipart-complete-topic \
+          --protocol sqs \
+          --notification-endpoint arn:aws:sqs:us-east-1:000000000000:multipart-complete-queue \
+          --attributes '{"RawMessageDelivery": "true"}'
+
+        # video-uploaded-topic -> orchestrator-queue
+        aws --endpoint-url=http://localstack:4566 sns subscribe \
+          --topic-arn arn:aws:sns:us-east-1:000000000000:video-uploaded-topic \
+          --protocol sqs \
+          --notification-endpoint arn:aws:sqs:us-east-1:000000000000:orchestrator-queue \
+          --attributes '{"RawMessageDelivery": "true"}'
+
+        # video-notification-topic -> notification-queue
+        aws --endpoint-url=http://localstack:4566 sns subscribe \
+          --topic-arn arn:aws:sns:us-east-1:000000000000:video-notification-topic \
+          --protocol sqs \
+          --notification-endpoint arn:aws:sqs:us-east-1:000000000000:notification-queue \
+          --attributes '{"RawMessageDelivery": "true"}'
+
+        # ============================================
+        # SQS PERMISSIONS (permitir SNS enviar mensagens)
+        # ============================================
+        echo "=== Configurando permissao das filas para SNS ==="
+
+        aws --endpoint-url=http://localstack:4566 sqs set-queue-attributes \
+          --queue-url http://localstack:4566/000000000000/multipart-complete-queue \
+          --attributes '{
+            "Policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"sns.amazonaws.com\"},\"Action\":\"sqs:SendMessage\",\"Resource\":\"arn:aws:sqs:us-east-1:000000000000:multipart-complete-queue\",\"Condition\":{\"ArnEquals\":{\"aws:SourceArn\":\"arn:aws:sns:us-east-1:000000000000:multipart-complete-topic\"}}}]}"
+          }'
+
         aws --endpoint-url=http://localstack:4566 sqs set-queue-attributes \
           --queue-url http://localstack:4566/000000000000/orchestrator-queue \
           --attributes '{
-            "Policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"events.amazonaws.com\"},\"Action\":\"sqs:SendMessage\",\"Resource\":\"arn:aws:sqs:us-east-1:000000000000:orchestrator-queue\"}]}"
+            "Policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"sns.amazonaws.com\"},\"Action\":\"sqs:SendMessage\",\"Resource\":\"arn:aws:sqs:us-east-1:000000000000:orchestrator-queue\",\"Condition\":{\"ArnEquals\":{\"aws:SourceArn\":\"arn:aws:sns:us-east-1:000000000000:video-uploaded-topic\"}}}]}"
           }'
 
         aws --endpoint-url=http://localstack:4566 sqs set-queue-attributes \
-          --queue-url http://localstack:4566/000000000000/print-queue \
+          --queue-url http://localstack:4566/000000000000/notification-queue \
           --attributes '{
-            "Policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"events.amazonaws.com\"},\"Action\":\"sqs:SendMessage\",\"Resource\":\"arn:aws:sqs:us-east-1:000000000000:print-queue\"}]}"
+            "Policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"sns.amazonaws.com\"},\"Action\":\"sqs:SendMessage\",\"Resource\":\"arn:aws:sqs:us-east-1:000000000000:notification-queue\",\"Condition\":{\"ArnEquals\":{\"aws:SourceArn\":\"arn:aws:sns:us-east-1:000000000000:video-notification-topic\"}}}]}"
           }'
 
+        # ============================================
         # EVENTBRIDGE RULES
+        # ============================================
         echo "=== Criando EventBridge rules ==="
 
-        # Rule 1: S3 CompleteMultipartUpload -> multipart-complete-queue
+        # Rule 1: S3 CompleteMultipartUpload -> multipart-complete-topic
         aws --endpoint-url=http://localstack:4566 events put-rule \
           --name multipart-complete-rule \
           --event-pattern '{
@@ -123,95 +198,66 @@ services:
             }
           }'
 
-        # Rule 2: Video UPLOADED -> orchestrator-queue
+        # Rule 2: Video UPLOADED -> video-uploaded-topic
+        # Detail contains envelope { metadata, payload } so status is at payload.status
         aws --endpoint-url=http://localstack:4566 events put-rule \
           --name video-uploaded-rule \
           --event-pattern '{
             "source": ["fiapx.video"],
             "detail-type": ["Video Status Changed"],
             "detail": {
-              "status": ["UPLOADED"]
+              "payload": {
+                "status": ["UPLOADED"]
+              }
             }
           }'
 
-        # Rule 3: Video status changes for notifications (PROCESSING, COMPLETED, FAILED)
+        # Rule 3: Video PROCESSING/COMPLETED/FAILED -> video-notification-topic
+        # Detail contains envelope { metadata, payload } so status is at payload.status
         aws --endpoint-url=http://localstack:4566 events put-rule \
           --name video-notification-rule \
           --event-pattern '{
             "source": ["fiapx.video"],
             "detail-type": ["Video Status Changed"],
             "detail": {
-              "status": ["PROCESSING", "COMPLETED", "FAILED"]
+              "payload": {
+                "status": ["PROCESSING", "COMPLETED", "FAILED"]
+              }
             }
           }'
 
         # ============================================
-        # EVENTBRIDGE TARGETS
+        # EVENTBRIDGE TARGETS (-> SNS Topics)
         # ============================================
-        echo "=== Configurando targets do EventBridge ==="
+        echo "=== Configurando targets do EventBridge (-> SNS) ==="
 
-        # ============================================
-        # FILA para eventos S3 CompleteMultipartUpload
-        # ============================================
-        # Nota: API Destinations não funcionam no LocalStack Free
-        # Por isso usamos SQS como alternativa
-
-        aws --endpoint-url=http://localstack:4566 sqs create-queue \
-          --queue-name multipart-complete-queue || true
-
-        # Target: S3 CompleteMultipart -> multipart-complete-queue
+        # Target: S3 CompleteMultipart -> multipart-complete-topic
         aws --endpoint-url=http://localstack:4566 events put-targets \
           --rule multipart-complete-rule \
           --targets '[
             {
-              "Id": "multipart-complete-queue-target",
-              "Arn": "arn:aws:sqs:us-east-1:000000000000:multipart-complete-queue"
+              "Id": "multipart-complete-sns-target",
+              "Arn": "arn:aws:sns:us-east-1:000000000000:multipart-complete-topic"
             }
           ]'
 
-        # API Connection (necessária para API Destinations de notificação)
-        echo "=== Criando API Connection ==="
-        aws --endpoint-url=http://localstack:4566 events create-connection \
-          --name fiapx-api-connection \
-          --authorization-type API_KEY \
-          --auth-parameters '{"ApiKeyAuthParameters": {"ApiKeyName": "x-api-key", "ApiKeyValue": "localstack-dev"}}' || true
-
-        # Target: Video UPLOADED -> orchestrator-queue
+        # Target: Video UPLOADED -> video-uploaded-topic
         aws --endpoint-url=http://localstack:4566 events put-targets \
           --rule video-uploaded-rule \
           --targets '[
             {
-              "Id": "orchestrator-queue-target",
-              "Arn": "arn:aws:sqs:us-east-1:000000000000:orchestrator-queue"
+              "Id": "video-uploaded-sns-target",
+              "Arn": "arn:aws:sns:us-east-1:000000000000:video-uploaded-topic"
             }
           ]'
 
-        # API Destination para notificações
-        aws --endpoint-url=http://localstack:4566 events create-api-destination \
-          --name fiapx-notification-webhook \
-          --connection-arn arn:aws:events:us-east-1:000000000000:connection/fiapx-api-connection \
-          --invocation-endpoint http://api:3002/videos/webhooks/notification \
-          --http-method POST \
-          --invocation-rate-limit-per-second 10 || true
-
-        # Target: Video PROCESSING/COMPLETED/FAILED -> notification webhook
+        # Target: Video PROCESSING/COMPLETED/FAILED -> video-notification-topic
         aws --endpoint-url=http://localstack:4566 events put-targets \
           --rule video-notification-rule \
           --targets '[
             {
-              "Id": "notification-webhook-target",
-              "Arn": "arn:aws:events:us-east-1:000000000000:api-destination/fiapx-notification-webhook",
-              "InputTransformer": {
-                "InputPathsMap": {
-                  "videoId": "$.detail.videoId",
-                  "status": "$.detail.status",
-                  "userEmail": "$.detail.userEmail",
-                  "videoName": "$.detail.videoName",
-                  "downloadUrl": "$.detail.downloadUrl",
-                  "errorReason": "$.detail.errorReason"
-                },
-                "InputTemplate": "{\"videoId\": <videoId>, \"status\": <status>, \"userEmail\": <userEmail>, \"videoName\": <videoName>, \"downloadUrl\": <downloadUrl>, \"errorReason\": <errorReason>}"
-              }
+              "Id": "video-notification-sns-target",
+              "Arn": "arn:aws:sns:us-east-1:000000000000:video-notification-topic"
             }
           ]'
 
@@ -254,9 +300,16 @@ services:
             "TextPart": "Ola {{email}}, houve um erro ao processar {{videoName}}. Motivo: {{errorReason}}"
           }' || true
 
+        # ============================================
+        # LISTAGEM DE RECURSOS
+        # ============================================
         echo "=== Listando recursos criados ==="
         echo "Filas SQS:"
         aws --endpoint-url=http://localstack:4566 sqs list-queues
+        echo "Topicos SNS:"
+        aws --endpoint-url=http://localstack:4566 sns list-topics
+        echo "Subscriptions SNS:"
+        aws --endpoint-url=http://localstack:4566 sns list-subscriptions
         echo "Rules EventBridge:"
         aws --endpoint-url=http://localstack:4566 events list-rules
         echo "Templates SES:"

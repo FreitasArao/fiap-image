@@ -10,13 +10,14 @@ describe('EnvelopeFactory', () => {
       const metadata = factory.createMetadata({
         correlationId: 'corr-123',
         eventType: 'test.event',
+        source: 'fiapx.video',
       })
 
       expect(metadata.messageId).toBeDefined()
       expect(metadata.messageId.length).toBe(36) // UUID format
       expect(metadata.correlationId).toBe('corr-123')
       expect(metadata.eventType).toBe('test.event')
-      expect(metadata.source).toBe('fiapx.video') // default source
+      expect(metadata.source).toBe('fiapx.video')
       expect(metadata.version).toBe('1.0')
       expect(metadata.timestamp).toBeDefined()
       expect(metadata.retryCount).toBe(0)
@@ -33,6 +34,7 @@ describe('EnvelopeFactory', () => {
       const metadata = factory.createMetadata({
         correlationId: 'corr-123',
         eventType: 'test.event',
+        source: 'fiapx.video',
       })
 
       expect(metadata.traceId).toBe('trace-abc')
@@ -46,6 +48,7 @@ describe('EnvelopeFactory', () => {
       const metadata = factory.createMetadata({
         correlationId: 'corr-123',
         eventType: 'test.event',
+        source: 'fiapx.video',
       })
 
       // Should have UUID format (36 chars with dashes)
@@ -64,6 +67,7 @@ describe('EnvelopeFactory', () => {
         correlationId: 'corr-123',
         eventType: 'test.event',
         traceId: 'override-trace',
+        source: 'custom-source',
         spanId: 'override-span',
       })
 
@@ -92,6 +96,7 @@ describe('EnvelopeFactory', () => {
       const envelope = factory.createEnvelope(payload, {
         correlationId: 'corr-123',
         eventType: 'user.created',
+        source: 'fiapx.video',
       })
 
       expect(envelope.metadata).toBeDefined()

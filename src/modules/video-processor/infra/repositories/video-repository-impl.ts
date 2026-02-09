@@ -408,4 +408,55 @@ export class VideoRepositoryImpl
 
     return Result.ok(newCount)
   }
+
+  async transitionStatus(
+    videoId: string,
+    expectedStatus: VideoStatus,
+    newStatus: VideoStatus,
+  ): Promise<boolean> {
+    this.logger.log('Transitioning video status with LWT', {
+      videoId,
+      expectedStatus,
+      newStatus,
+    })
+
+    try {
+      const query = `
+        UPDATE video
+        SET status = ?, updated_at = ?
+        WHERE video_id = ?
+        IF status = ?
+      `
+      const params = [newStatus, new Date(), videoId, expectedStatus]
+
+      const result = await this.datasource.execute(query, params)
+
+      if (result.isFailure) {
+        this.logger.error('Failed to execute LWT transition', {
+          videoId,
+          error: result.error,
+        })
+        return false
+      }
+
+      // In Cassandra LWT, the result contains an [applied] column
+      // that indicates whether the conditional update was applied
+      const wasApplied = result.value.rows[0]?.['[applied]'] === true
+
+      this.logger.log('LWT transition result', {
+        videoId,
+        wasApplied,
+        expectedStatus,
+        newStatus,
+      })
+
+      return wasApplied
+    } catch (error) {
+      this.logger.error('Error during LWT transition', {
+        videoId,
+        error,
+      })
+      return false
+    }
+  }
 }

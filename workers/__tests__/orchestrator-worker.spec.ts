@@ -2,6 +2,7 @@ import { describe, expect, it, mock, beforeEach } from 'bun:test'
 import { context } from '@opentelemetry/api'
 import { PinoLoggerService } from '@core/libs/logging/pino-logger'
 import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import { CorrelationStore } from '@core/libs/context'
 import { StoragePathBuilder } from '@modules/video-processor/infra/services/storage'
 import type { MessageContext } from '@core/messaging'
 import type { VideoEvent, SegmentMessage } from '@core/messaging/schemas'
@@ -295,7 +296,11 @@ describe('VideoEventHandler', () => {
         },
       }
 
-      const result = await handler.handle(event, createContext('corr-123'))
+      // correlationId is resolved from CorrelationStore (set by SQS consumer in production)
+      const result = await CorrelationStore.run(
+        { correlationId: 'corr-123', traceId: 'trace-123' },
+        () => handler.handle(event, createContext('corr-123')),
+      )
 
       expect(result.isSuccess).toBe(true)
       expect(eventEmitter.emittedEvents).toHaveLength(1)
@@ -331,7 +336,7 @@ describe('VideoEventHandler', () => {
       expect(result.error.message).toContain('Failed to publish segments')
     })
 
-    it('should use messageId as correlationId when metadata is null', async () => {
+    it('should use CorrelationStore correlationId when metadata is null', async () => {
       const eventEmitter = createMockEventEmitter()
       const { handler } = createTestHandler({ eventEmitter })
       const event: VideoEvent = {
@@ -342,10 +347,14 @@ describe('VideoEventHandler', () => {
         },
       }
 
-      const result = await handler.handle(event, createContext())
+      // In production, AbstractSQSConsumer sets CorrelationStore before calling handle
+      const result = await CorrelationStore.run(
+        { correlationId: 'store-corr-id', traceId: 'store-trace-id' },
+        () => handler.handle(event, createContext()),
+      )
 
       expect(result.isSuccess).toBe(true)
-      expect(eventEmitter.emittedEvents[0].correlationId).toBe('sqs-msg-123')
+      expect(eventEmitter.emittedEvents[0].correlationId).toBe('store-corr-id')
     })
   })
 })

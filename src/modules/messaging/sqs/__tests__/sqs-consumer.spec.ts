@@ -116,7 +116,7 @@ describe('AbstractSQSConsumer', () => {
       expect(result.isSuccess).toBe(true)
       expect(handler.handledPayloads.length).toBe(1)
       expect(handler.handledPayloads[0].payload).toEqual(payload)
-      expect(handler.handledPayloads[0].context.metadata?.correlationId).toBe(
+      expect(handler.handledPayloads[0].context.metadata.correlationId).toBe(
         'corr-456',
       )
     })
@@ -134,7 +134,21 @@ describe('AbstractSQSConsumer', () => {
 
     it('should return failure Result with NonRetryableError', async () => {
       handler.shouldFailWithNonRetryable = true
-      const msgContext: MessageContext = { metadata: null, messageId: 'msg-1' }
+      const msgContext: MessageContext = {
+        metadata: {
+          messageId: 'msg-1',
+          correlationId: 'corr-1',
+          traceId: 'trace-1',
+          spanId: 'span-1',
+          source: 'test',
+          eventType: 'test.event',
+          version: '1.0',
+          timestamp: new Date().toISOString(),
+          retryCount: 0,
+          maxRetries: 3,
+        },
+        messageId: 'msg-1',
+      }
 
       const result = await handler.handle({ id: 'test', value: 1 }, msgContext)
 
@@ -144,7 +158,21 @@ describe('AbstractSQSConsumer', () => {
 
     it('should return failure Result with retryable Error', async () => {
       handler.shouldFailHandle = true
-      const msgContext: MessageContext = { metadata: null, messageId: 'msg-1' }
+      const msgContext: MessageContext = {
+        metadata: {
+          messageId: 'msg-1',
+          correlationId: 'corr-1',
+          traceId: 'trace-1',
+          spanId: 'span-1',
+          source: 'test',
+          eventType: 'test.event',
+          version: '1.0',
+          timestamp: new Date().toISOString(),
+          retryCount: 0,
+          maxRetries: 3,
+        },
+        messageId: 'msg-1',
+      }
 
       const result = await handler.handle({ id: 'test', value: 1 }, msgContext)
 

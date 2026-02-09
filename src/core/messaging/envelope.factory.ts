@@ -7,7 +7,6 @@ import type { TracingProvider } from './tracing-provider'
 import { defaultTracingProvider } from './tracing-provider'
 
 const DEFAULT_VERSION = '1.0'
-const DEFAULT_SOURCE = 'fiapx.video'
 const DEFAULT_MAX_RETRIES = 3
 
 export class EnvelopeFactory {
@@ -27,7 +26,7 @@ export class EnvelopeFactory {
       correlationId: options.correlationId,
       traceId,
       spanId,
-      source: options.source ?? DEFAULT_SOURCE,
+      source: options.source,
       eventType: options.eventType,
       version: options.version ?? DEFAULT_VERSION,
       timestamp: new Date().toISOString(),

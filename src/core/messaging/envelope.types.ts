@@ -1,5 +1,3 @@
-import type { Message } from '@aws-sdk/client-sqs'
-
 export interface EnvelopeMetadata {
   messageId: string
   correlationId: string
@@ -19,8 +17,7 @@ export interface MessageEnvelope<T> {
 }
 
 export interface MessageContext {
-  metadata: EnvelopeMetadata | null
-  sqsMessage?: Message
+  metadata: EnvelopeMetadata
   messageId?: string
 }
 
@@ -32,7 +29,7 @@ export interface TracingContext {
 export interface CreateMetadataOptions {
   correlationId: string
   eventType: string
-  source?: string
+  source: string
   traceId?: string
   spanId?: string
   version?: string
