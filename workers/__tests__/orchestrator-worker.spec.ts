@@ -44,9 +44,11 @@ function createMockEventEmitter(): EventBusEmitter & {
   }
 }
 
-function createMockPublisher(): AbstractSQSPublisher<SegmentMessage> & {
+type MockPublisher = AbstractSQSPublisher<SegmentMessage> & {
   publishedMessages: SegmentMessage[][]
-} {
+}
+
+function createMockPublisher(): MockPublisher {
   const publishedMessages: SegmentMessage[][] = []
   return {
     publishedMessages,
@@ -55,9 +57,10 @@ function createMockPublisher(): AbstractSQSPublisher<SegmentMessage> & {
       publishedMessages.push(messages)
       return Promise.resolve(Result.ok(undefined))
     }),
-  } as unknown as AbstractSQSPublisher<SegmentMessage> & {
-    publishedMessages: SegmentMessage[][]
-  }
+  } as Pick<
+    MockPublisher,
+    'publish' | 'publishBatch' | 'publishedMessages'
+  > as MockPublisher
 }
 
 function createTestPathBuilder(): StoragePathBuilder {

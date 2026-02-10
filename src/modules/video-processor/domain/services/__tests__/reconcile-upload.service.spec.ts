@@ -10,21 +10,10 @@ import { MegabytesValueObject } from '@modules/video-processor/domain/value-obje
 import { UniqueEntityID } from '@core/domain/value-objects/unique-entity-id.vo'
 import { VideoThirdPartyIntegrationsMetadataVO } from '@modules/video-processor/domain/value-objects/video-third-party-integrations-metadata.vo'
 import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import { LoggerStub } from '@core/libs/logging/__tests__/logger.stub'
 import type { VideoRepository } from '@modules/video-processor/domain/repositories/video.repository'
 import type { DefaultEventBridge } from '@core/events/event-bridge'
 import { Result } from '@core/domain/result'
-
-function makeLogger(): AbstractLoggerService {
-  return {
-    log: mock(),
-    error: mock(),
-    warn: mock(),
-    debug: mock(),
-    verbose: mock(),
-    withContext: mock(),
-    context: undefined,
-  } as unknown as AbstractLoggerService
-}
 
 function makeVideoInStatus(status: string): Video {
   const id = UniqueEntityID.create()
@@ -54,7 +43,7 @@ describe('ReconcileUploadService', () => {
   let service: ReconcileUploadService
 
   beforeEach(() => {
-    logger = makeLogger()
+    logger = new LoggerStub()
     videoRepository = {
       transitionStatus: mock(async () => true),
       findById: mock(),
@@ -66,10 +55,10 @@ describe('ReconcileUploadService', () => {
       findByObjectKey: mock(),
       updateTotalSegments: mock(),
       incrementProcessedSegments: mock(),
-    } as unknown as VideoRepository
+    } satisfies Record<keyof VideoRepository, unknown> as VideoRepository
     eventBridge = {
       send: mock(async () => Result.ok({})),
-    } as unknown as DefaultEventBridge
+    } as Pick<DefaultEventBridge, 'send'> as DefaultEventBridge
     service = new ReconcileUploadService(logger, videoRepository, eventBridge)
   })
 

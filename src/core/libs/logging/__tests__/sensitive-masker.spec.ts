@@ -89,16 +89,14 @@ describe('SensitiveDataMasker', () => {
   })
 
   it('should return data as-is when input is falsy', () => {
-    const result = SensitiveDataMasker.mask(
-      null as unknown as Record<string, unknown>,
-    )
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- testing runtime guard for invalid input
+    const result = SensitiveDataMasker.mask(null as any)
     expect(result).toBeNull()
   })
 
   it('should return data as-is when input is not an object', () => {
-    const result = SensitiveDataMasker.mask(
-      'string' as unknown as Record<string, unknown>,
-    )
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- testing runtime guard for invalid input
+    const result = SensitiveDataMasker.mask('string' as any)
     expect(result).toBe('string')
   })
 

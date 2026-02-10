@@ -12,20 +12,9 @@ import { VideoThirdPartyIntegrationsMetadataVO } from '@modules/video-processor/
 import { VideoPart } from '@modules/video-processor/domain/entities/video-part'
 import { ThirdPartyIntegration } from '@modules/video-processor/domain/entities/third-party-integration.vo'
 import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import { LoggerStub } from '@core/libs/logging/__tests__/logger.stub'
 import type { VideoRepository } from '@modules/video-processor/domain/repositories/video.repository'
 import { Result } from '@core/domain/result'
-
-function makeLogger(): AbstractLoggerService {
-  return {
-    log: mock(),
-    error: mock(),
-    warn: mock(),
-    debug: mock(),
-    verbose: mock(),
-    withContext: mock(),
-    context: undefined,
-  } as unknown as AbstractLoggerService
-}
 
 function makeVideo(): Video {
   const id = UniqueEntityID.create()
@@ -68,7 +57,7 @@ describe('SqsUploadReconciler', () => {
   let reconciler: SqsUploadReconciler
 
   beforeEach(() => {
-    logger = makeLogger()
+    logger = new LoggerStub()
     videoRepository = {
       findByObjectKey: mock(async () => Result.ok(makeVideo())),
       updateVideoPart: mock(async () => Result.ok(undefined)),
@@ -80,12 +69,12 @@ describe('SqsUploadReconciler', () => {
       findByIntegrationId: mock(),
       updateTotalSegments: mock(),
       incrementProcessedSegments: mock(),
-    } as unknown as VideoRepository
+    } satisfies Record<keyof VideoRepository, unknown> as VideoRepository
     reconcileService = {
       reconcile: mock(async () =>
         Result.ok({ skipped: false, videoId: 'vid-1', status: 'UPLOADED' }),
       ),
-    } as unknown as ReconcileUploadService
+    } as Pick<ReconcileUploadService, 'reconcile'> as ReconcileUploadService
     reconciler = new SqsUploadReconciler(
       logger,
       videoRepository,

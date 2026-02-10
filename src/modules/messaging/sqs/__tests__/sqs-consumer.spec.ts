@@ -7,6 +7,7 @@ import {
   type SQSConsumerConfig,
 } from '../abstract-sqs-consumer'
 import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import { LoggerStub } from '@core/libs/logging/__tests__/logger.stub'
 import type { Message } from '@aws-sdk/client-sqs'
 
 type MockFn = ReturnType<typeof mock>
@@ -14,18 +15,6 @@ type MockFn = ReturnType<typeof mock>
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 type TestPayload = { id: string; value: number }
-
-function makeLogger(): AbstractLoggerService {
-  return {
-    log: mock(),
-    error: mock(),
-    warn: mock(),
-    debug: mock(),
-    verbose: mock(),
-    withContext: mock(),
-    context: undefined,
-  } as unknown as AbstractLoggerService
-}
 
 function makeMetadata(overrides: Record<string, unknown> = {}) {
   return {
@@ -151,7 +140,7 @@ describe('AbstractSQSConsumer', () => {
     ;(mockConsumerInstance.stop as MockFn).mockClear()
     mockConsumerInstance.status = { isRunning: false }
 
-    logger = makeLogger()
+    logger = new LoggerStub()
     handler = new TestMessageHandler()
   })
 

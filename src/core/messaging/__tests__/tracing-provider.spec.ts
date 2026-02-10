@@ -1,6 +1,7 @@
 import { describe, it, expect, mock } from 'bun:test'
-import { trace, context, type Span, type SpanContext } from '@opentelemetry/api'
+import { trace, context, type SpanContext } from '@opentelemetry/api'
 import { OpenTelemetryTracingProvider } from '../tracing-provider'
+import { createSpanStub } from './span.stub'
 
 type MutableTrace = Record<string, unknown>
 
@@ -12,24 +13,11 @@ describe('OpenTelemetryTracingProvider', () => {
   })
 
   it('should return traceId and spanId when active span has valid context', () => {
-    const fakeSpanContext: SpanContext = {
+    const fakeSpan = createSpanStub({
       traceId: 'abc123def456abc123def456abc123de',
       spanId: 'span1234span1234',
       traceFlags: 1,
-    }
-
-    const fakeSpan = {
-      spanContext: () => fakeSpanContext,
-      setAttribute: mock(),
-      setAttributes: mock(),
-      addEvent: mock(),
-      setStatus: mock(),
-      updateName: mock(),
-      end: mock(),
-      isRecording: () => true,
-      recordException: mock(),
-      addLink: mock(),
-    } as unknown as Span
+    })
 
     // Set the span on a context and use context.with to make it active
     const ctx = trace.setSpan(context.active(), fakeSpan)
@@ -59,22 +47,11 @@ describe('OpenTelemetryTracingProvider', () => {
   })
 
   it('should return null when spanContext has empty traceId', () => {
-    const fakeSpan = {
-      spanContext: () => ({
-        traceId: '',
-        spanId: 'valid-span-id',
-        traceFlags: 0,
-      }),
-      setAttribute: mock(),
-      setAttributes: mock(),
-      addEvent: mock(),
-      setStatus: mock(),
-      updateName: mock(),
-      end: mock(),
-      isRecording: () => true,
-      recordException: mock(),
-      addLink: mock(),
-    } as unknown as Span
+    const fakeSpan = createSpanStub({
+      traceId: '',
+      spanId: 'valid-span-id',
+      traceFlags: 0,
+    })
 
     const ctx = trace.setSpan(context.active(), fakeSpan)
 
@@ -90,22 +67,11 @@ describe('OpenTelemetryTracingProvider', () => {
   })
 
   it('should return null when spanContext has empty spanId', () => {
-    const fakeSpan = {
-      spanContext: () => ({
-        traceId: 'valid-trace-id',
-        spanId: '',
-        traceFlags: 0,
-      }),
-      setAttribute: mock(),
-      setAttributes: mock(),
-      addEvent: mock(),
-      setStatus: mock(),
-      updateName: mock(),
-      end: mock(),
-      isRecording: () => true,
-      recordException: mock(),
-      addLink: mock(),
-    } as unknown as Span
+    const fakeSpan = createSpanStub({
+      traceId: 'valid-trace-id',
+      spanId: '',
+      traceFlags: 0,
+    })
 
     const ctx = trace.setSpan(context.active(), fakeSpan)
 
@@ -123,15 +89,11 @@ describe('OpenTelemetryTracingProvider', () => {
    */
   describe('branch coverage via direct invocation', () => {
     it('should return tracing context when span has valid traceId and spanId (line 16, 22-24)', () => {
-      const fakeSpanContext = {
+      const fakeSpan = createSpanStub({
         traceId: 'trace-abc-123',
         spanId: 'span-xyz-789',
         traceFlags: 1,
-      }
-
-      const fakeSpan = {
-        spanContext: () => fakeSpanContext,
-      } as unknown as Span
+      })
 
       // Directly test the logic path by extracting spanContext
       const provider = new OpenTelemetryTracingProvider()
@@ -152,9 +114,9 @@ describe('OpenTelemetryTracingProvider', () => {
     })
 
     it('should return null when spanContext is falsy (line 18)', () => {
-      const fakeSpan = {
-        spanContext: () => null as unknown as SpanContext,
-      } as unknown as Span
+      const fakeSpan = createSpanStub()
+      // Override spanContext to return null for this specific edge case
+      fakeSpan.spanContext = () => null as SpanContext
 
       const provider = new OpenTelemetryTracingProvider()
       const originalGetSpan = trace.getSpan
@@ -169,9 +131,11 @@ describe('OpenTelemetryTracingProvider', () => {
     })
 
     it('should return null when traceId is empty (line 18-20)', () => {
-      const fakeSpan = {
-        spanContext: () => ({ traceId: '', spanId: 'span-ok', traceFlags: 0 }),
-      } as unknown as Span
+      const fakeSpan = createSpanStub({
+        traceId: '',
+        spanId: 'span-ok',
+        traceFlags: 0,
+      })
 
       const provider = new OpenTelemetryTracingProvider()
       const originalGetSpan = trace.getSpan
@@ -186,13 +150,11 @@ describe('OpenTelemetryTracingProvider', () => {
     })
 
     it('should return null when spanId is empty (line 18-20)', () => {
-      const fakeSpan = {
-        spanContext: () => ({
-          traceId: 'trace-ok',
-          spanId: '',
-          traceFlags: 0,
-        }),
-      } as unknown as Span
+      const fakeSpan = createSpanStub({
+        traceId: 'trace-ok',
+        spanId: '',
+        traceFlags: 0,
+      })
 
       const provider = new OpenTelemetryTracingProvider()
       const originalGetSpan = trace.getSpan

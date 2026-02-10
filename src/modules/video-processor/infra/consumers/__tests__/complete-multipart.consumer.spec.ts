@@ -10,6 +10,7 @@ import {
 } from '@modules/video-processor/infra/consumers/complete-multipart.consumer'
 import { CompleteMultipartHandler } from '@modules/video-processor/infra/consumers/complete-multipart-handler'
 import { ReconcileUploadService } from '@modules/video-processor/domain/services/reconcile-upload.service'
+import type { DefaultEventBridge } from '@core/events/event-bridge'
 import { SqsUploadReconciler } from '@modules/video-processor/domain/services/sqs-upload-reconciler.service'
 import type { CompleteMultipartEvent } from '@core/messaging/schemas'
 import type { MessageContext } from '@core/messaging'
@@ -32,11 +33,10 @@ function createMockHandler(): CompleteMultipartHandler {
   const reconcileService = new ReconcileUploadService(
     mockLogger,
     videoRepository,
-    eventBridge as unknown as Parameters<
-      typeof ReconcileUploadService.prototype.reconcile
-    >[0] extends { eventBridge: infer E }
-      ? E
-      : never,
+    eventBridge as Pick<
+      DefaultEventBridge,
+      'send' | 'eventBusName'
+    > as DefaultEventBridge,
   )
 
   const sqsReconciler = new SqsUploadReconciler(

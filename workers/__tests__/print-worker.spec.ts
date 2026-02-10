@@ -17,6 +17,20 @@ import {
   type PrintWorkerDeps,
 } from '@workers/print-worker'
 
+/**
+ * Exposes private methods of SegmentEventHandler for testing.
+ * Avoids scattered `as unknown as { ... }` casts.
+ */
+type SegmentEventHandlerTestable = SegmentEventHandler & {
+  isNonRetryableError(error: Error): boolean
+  checkAndUpdateProgress(
+    videoId: string,
+    segmentNumber: number,
+    totalSegments: number,
+    correlationId: string,
+  ): boolean
+}
+
 function createMockLogger(): AbstractLoggerService {
   return new PinoLoggerService({ suppressConsole: true }, context.active())
 }
@@ -172,10 +186,9 @@ describe('SegmentEventHandler', () => {
       ['Rate limit exceeded', false],
     ])('should return %s for error "%s"', (errorMessage, expected) => {
       const { handler } = createTestHandler()
+      const testable = handler as SegmentEventHandlerTestable
 
-      const result = (
-        handler as unknown as { isNonRetryableError: (e: Error) => boolean }
-      ).isNonRetryableError(new Error(errorMessage))
+      const result = testable.isNonRetryableError(new Error(errorMessage))
 
       expect(result).toBe(expected)
     })
@@ -184,51 +197,42 @@ describe('SegmentEventHandler', () => {
   describe('checkAndUpdateProgress', () => {
     it('should return true when segment is the last one', () => {
       const { handler } = createTestHandler()
+      const testable = handler as SegmentEventHandlerTestable
 
-      const result = (
-        handler as unknown as {
-          checkAndUpdateProgress: (
-            v: string,
-            s: number,
-            t: number,
-            c: string,
-          ) => boolean
-        }
-      ).checkAndUpdateProgress('video-123', 10, 10, 'corr-123')
+      const result = testable.checkAndUpdateProgress(
+        'video-123',
+        10,
+        10,
+        'corr-123',
+      )
 
       expect(result).toBe(true)
     })
 
     it('should return false when segment is not the last one', () => {
       const { handler } = createTestHandler()
+      const testable = handler as SegmentEventHandlerTestable
 
-      const result = (
-        handler as unknown as {
-          checkAndUpdateProgress: (
-            v: string,
-            s: number,
-            t: number,
-            c: string,
-          ) => boolean
-        }
-      ).checkAndUpdateProgress('video-123', 5, 10, 'corr-123')
+      const result = testable.checkAndUpdateProgress(
+        'video-123',
+        5,
+        10,
+        'corr-123',
+      )
 
       expect(result).toBe(false)
     })
 
     it('should return true for single segment video', () => {
       const { handler } = createTestHandler()
+      const testable = handler as SegmentEventHandlerTestable
 
-      const result = (
-        handler as unknown as {
-          checkAndUpdateProgress: (
-            v: string,
-            s: number,
-            t: number,
-            c: string,
-          ) => boolean
-        }
-      ).checkAndUpdateProgress('video-123', 1, 1, 'corr-123')
+      const result = testable.checkAndUpdateProgress(
+        'video-123',
+        1,
+        1,
+        'corr-123',
+      )
 
       expect(result).toBe(true)
     })

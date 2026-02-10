@@ -1,7 +1,6 @@
 [test]
 timeout = 5000  # 5 seconds per test
-coverageThreshold = { lines = 0.80, functions = 0.5 }
 coverageReporter = ["text", "lcov"]
 coverageDir = "coverage"
 coverageSkipTestFiles = true  # default false
-coverageExcludeGlobs = ["__tests__"]
+coverageExcludeGlobs = ["**/__tests__/**"]

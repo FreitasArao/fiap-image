@@ -1,25 +1,19 @@
 import { PinoLoggerService } from '@core/libs/logging/pino-logger'
-import type { Context } from '@opentelemetry/api'
-import { beforeEach, describe, expect, it, mock } from 'bun:test'
-import type pino from 'pino'
+import { context } from '@opentelemetry/api'
+import { beforeEach, describe, expect, it } from 'bun:test'
+import type { Logger as PinoBaseLogger } from 'pino'
+import { createPinoStub } from './pino.stub'
 
 describe('PinoLoggerService - Unit', () => {
   let logger: PinoLoggerService
-  let mockPino: pino.Logger
+  let mockPino: PinoBaseLogger
 
   beforeEach(() => {
-    mockPino = {
-      info: mock(),
-      error: mock(),
-      warn: mock(),
-      debug: mock(),
-      trace: mock(),
-      level: 'info',
-    } as unknown as pino.Logger
+    mockPino = createPinoStub()
 
     logger = new PinoLoggerService(
       { suppressConsole: false },
-      {} as Context,
+      context.active(),
       mockPino,
       'TestContext',
     )
@@ -57,7 +51,7 @@ describe('PinoLoggerService - Unit', () => {
   it('does not log when suppressConsole=true', () => {
     const suppressed = new PinoLoggerService(
       { suppressConsole: true },
-      {} as unknown as Context,
+      context.active(),
       mockPino,
       'Silent',
     )

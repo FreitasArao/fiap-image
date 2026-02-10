@@ -2,8 +2,8 @@ import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 import { PinoLoggerService } from '@core/libs/logging/pino-logger'
 import { CorrelationStore } from '@core/libs/context'
 import { context, trace } from '@opentelemetry/api'
-import type { Logger as PinoBaseLogger } from 'pino'
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
+import { createPinoStub } from './pino.stub'
 
 type MockFn = ReturnType<typeof mock>
 
@@ -46,19 +46,9 @@ describe('PinoLoggerService', () => {
 
   describe('debug()', () => {
     it('should delegate to handleLog with debug level', () => {
-      const mockPino = {
-        debug: mock(),
-        info: mock(),
-        warn: mock(),
-        error: mock(),
-        trace: mock(),
-      }
+      const mockPino = createPinoStub()
 
-      const logger = new PinoLoggerService(
-        {},
-        context.active(),
-        mockPino as unknown as PinoBaseLogger,
-      )
+      const logger = new PinoLoggerService({}, context.active(), mockPino)
 
       logger.debug('debug message', { key: 'value' })
 
@@ -66,19 +56,9 @@ describe('PinoLoggerService', () => {
     })
 
     it('should include extra in the debug log', () => {
-      const mockPino = {
-        debug: mock(),
-        info: mock(),
-        warn: mock(),
-        error: mock(),
-        trace: mock(),
-      }
+      const mockPino = createPinoStub()
 
-      const logger = new PinoLoggerService(
-        {},
-        context.active(),
-        mockPino as unknown as PinoBaseLogger,
-      )
+      const logger = new PinoLoggerService({}, context.active(), mockPino)
 
       logger.debug('debug with extra', { someKey: 'someVal' })
 
@@ -90,19 +70,9 @@ describe('PinoLoggerService', () => {
 
   describe('verbose()', () => {
     it('should delegate to handleLog with trace level', () => {
-      const mockPino = {
-        debug: mock(),
-        info: mock(),
-        warn: mock(),
-        error: mock(),
-        trace: mock(),
-      }
+      const mockPino = createPinoStub()
 
-      const logger = new PinoLoggerService(
-        {},
-        context.active(),
-        mockPino as unknown as PinoBaseLogger,
-      )
+      const logger = new PinoLoggerService({}, context.active(), mockPino)
 
       logger.verbose('verbose message', { key: 'value' })
 
@@ -110,18 +80,12 @@ describe('PinoLoggerService', () => {
     })
 
     it('should include context when set via withContext', () => {
-      const mockPino = {
-        debug: mock(),
-        info: mock(),
-        warn: mock(),
-        error: mock(),
-        trace: mock(),
-      }
+      const mockPino = createPinoStub()
 
       const logger = new PinoLoggerService(
         {},
         context.active(),
-        mockPino as unknown as PinoBaseLogger,
+        mockPino,
         'VerboseCtx',
       )
 
@@ -220,19 +184,9 @@ describe('PinoLoggerService', () => {
 
   describe('withContext()', () => {
     it('should return a new PinoLoggerService with the given context', () => {
-      const mockPino = {
-        debug: mock(),
-        info: mock(),
-        warn: mock(),
-        error: mock(),
-        trace: mock(),
-      }
+      const mockPino = createPinoStub()
 
-      const logger = new PinoLoggerService(
-        {},
-        context.active(),
-        mockPino as unknown as PinoBaseLogger,
-      )
+      const logger = new PinoLoggerService({}, context.active(), mockPino)
 
       const scoped = logger.withContext('ScopedService')
 

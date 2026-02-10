@@ -12,13 +12,12 @@ import { PinoLoggerService } from '@core/libs/logging/pino-logger'
 import { context } from '@opentelemetry/api'
 
 function createMockLogger(): AbstractLoggerService {
-  const logger = new PinoLoggerService(
+  return new PinoLoggerService(
     {
       suppressConsole: true,
     },
     context.active(),
   )
-  return logger as unknown as AbstractLoggerService
 }
 
 type CreatePartUploadURLParams = {

@@ -1,6 +1,7 @@
 import { PinoLoggerService } from '@core/libs/logging/pino-logger'
 import { CompleteMultipartHandler } from '@modules/video-processor/infra/consumers/complete-multipart-handler'
 import { ReconcileUploadService } from '@modules/video-processor/domain/services/reconcile-upload.service'
+import type { DefaultEventBridge } from '@core/events/event-bridge'
 import { SqsUploadReconciler } from '@modules/video-processor/domain/services/sqs-upload-reconciler.service'
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
 import { context } from '@opentelemetry/api'
@@ -82,11 +83,10 @@ describe('CompleteMultipartHandler', () => {
     const reconcileService = new ReconcileUploadService(
       logger,
       videoRepository,
-      mockEventBridge as unknown as Parameters<
-        typeof ReconcileUploadService.prototype.reconcile
-      >[0] extends { eventBridge: infer E }
-        ? E
-        : never,
+      mockEventBridge as Pick<
+        DefaultEventBridge,
+        'send' | 'eventBusName'
+      > as DefaultEventBridge,
     )
 
     const sqsReconciler = new SqsUploadReconciler(

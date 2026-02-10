@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { mockClient } from 'aws-sdk-client-mock'
 import {
   SQSClient,
@@ -8,6 +8,7 @@ import {
 import { createSQSPublisher } from '../abstract-sqs-publisher'
 import { TracingProviderStub } from '@core/messaging/__tests__/tracing-provider.stub'
 import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import { LoggerStub } from '@core/libs/logging/__tests__/logger.stub'
 
 const sqsMock = mockClient(SQSClient)
 
@@ -16,10 +17,7 @@ describe('AbstractSQSPublisher', () => {
 
   beforeEach(() => {
     sqsMock.reset()
-    logger = {
-      log: mock(),
-      error: mock(),
-    } as unknown as AbstractLoggerService
+    logger = new LoggerStub()
   })
 
   afterEach(() => {
