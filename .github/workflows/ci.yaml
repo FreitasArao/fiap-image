@@ -66,6 +66,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile.api
           platforms: linux/amd64
           push: true
           tags: |
