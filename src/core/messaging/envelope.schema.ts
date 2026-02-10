@@ -13,13 +13,6 @@ export const EnvelopeMetadataSchema = z.object({
   maxRetries: z.number().int().min(0),
 })
 
-export function createEnvelopeSchema<T extends z.ZodTypeAny>(payloadSchema: T) {
-  return z.object({
-    metadata: EnvelopeMetadataSchema,
-    payload: payloadSchema,
-  })
-}
-
 export const GenericEnvelopeSchema = z.object({
   metadata: EnvelopeMetadataSchema,
   payload: z.unknown(),

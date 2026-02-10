@@ -1,4 +1,4 @@
-import { BaseValueObject } from '@core/domain/value-object/base-value-object'
+import { BaseValueObject } from '@core/domain/value-objects/base-value-object'
 
 export type VideoStorageMetadata = {
   uploadId: string

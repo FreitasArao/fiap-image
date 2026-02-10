@@ -1,4 +1,4 @@
-import { BaseValueObject } from '@core/domain/value-object/base-value-object'
+import { BaseValueObject } from '@core/domain/value-objects/base-value-object'
 
 export class MegabytesValueObject extends BaseValueObject<number> {
   static create(value: number): MegabytesValueObject {

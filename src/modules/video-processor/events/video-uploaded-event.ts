@@ -5,8 +5,4 @@ export class VideoUploadedEvent extends DomainEvent<Video> {
   get eventName(): string {
     return 'VideoUploaded'
   }
-
-  constructor(video: Video) {
-    super(video)
-  }
 }

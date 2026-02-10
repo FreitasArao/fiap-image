@@ -61,4 +61,43 @@ describe('SensitiveDataMasker', () => {
     const masked = SensitiveDataMasker.mask(data)
     expect(masked.PassWord).toBe('Case***')
   })
+
+  describe('addSensitiveKeys()', () => {
+    it('should mask values for newly added custom sensitive keys', () => {
+      SensitiveDataMasker.addSensitiveKeys(['ssn', 'credit_card'])
+
+      const data = {
+        ssn: '123-45-6789',
+        credit_card: '4111111111111111',
+        name: 'John',
+      }
+
+      const masked = SensitiveDataMasker.mask(data)
+
+      expect(masked.ssn).toBe('123-***')
+      expect(masked.credit_card).toBe('4111***')
+      expect(masked.name).toBe('John')
+    })
+
+    it('should normalize added keys to lowercase', () => {
+      SensitiveDataMasker.addSensitiveKeys(['MyCustomSecret'])
+
+      const data = {
+        mycustomsecret: 'hidden-value-123',
+      }
+
+      const masked = SensitiveDataMasker.mask(data)
+
+      expect(masked.mycustomsecret).toBe('hidd***')
+    })
+
+    it('should handle empty array without error', () => {
+      SensitiveDataMasker.addSensitiveKeys([])
+
+      const data = { username: 'johndoe' }
+      const masked = SensitiveDataMasker.mask(data)
+
+      expect(masked.username).toBe('johndoe')
+    })
+  })
 })

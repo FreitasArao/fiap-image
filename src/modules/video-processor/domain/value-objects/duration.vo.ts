@@ -1,23 +1,5 @@
-import { BaseValueObject } from '@core/domain/value-object/base-value-object'
+import { BaseValueObject } from '@core/domain/value-objects/base-value-object'
 
-/**
- * Value Object that represents a duration in milliseconds.
- *
- * All internal storage is in milliseconds for maximum precision.
- * Provides convenient getters for seconds and minutes.
- *
- * @example
- * // Create from milliseconds (2 minutes)
- * const duration = DurationVO.fromMilliseconds(120000)
- *
- * // Create from seconds (2 minutes)
- * const duration = DurationVO.fromSeconds(120)
- *
- * // Access in different units
- * duration.milliseconds // 120000
- * duration.seconds      // 120
- * duration.minutes      // 2
- */
 export class DurationVO extends BaseValueObject<number> {
   private constructor(milliseconds: number) {
     super(milliseconds)

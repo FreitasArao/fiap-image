@@ -1,4 +1,4 @@
-import { BaseValueObject } from '@core/domain/value-object/base-value-object'
+import { BaseValueObject } from '@core/domain/value-objects/base-value-object'
 import { DurationVO } from './duration.vo'
 
 export type VideoMetadataInput = {

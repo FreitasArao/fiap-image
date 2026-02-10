@@ -12,7 +12,6 @@ export type {
 export {
   EnvelopeMetadataSchema,
   GenericEnvelopeSchema,
-  createEnvelopeSchema,
   type EnvelopeMetadataType,
 } from './envelope.schema'
 

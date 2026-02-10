@@ -181,4 +181,126 @@ describe('AbstractSQSPublisher', () => {
     expect(result.isSuccess).toBe(true)
     expect(sqsMock.commandCalls(SendMessageBatchCommand).length).toBe(0)
   })
+
+  describe('publish() error handling', () => {
+    it('should return failure when SQS send throws an Error', async () => {
+      sqsMock
+        .on(SendMessageCommand)
+        .rejects(new Error('SQS connection refused'))
+
+      const publisher = createSQSPublisher<{ id: string }>(
+        { queueUrl: 'http://queue.url' },
+        logger,
+      )
+
+      const result = await publisher.publish(
+        { id: 'msg-err' },
+        { eventType: 'test.event', correlationId: 'corr-err' },
+      )
+
+      expect(result.isFailure).toBe(true)
+      expect(result.error.message).toBe('SQS connection refused')
+      expect(logger.error).toHaveBeenCalled()
+    })
+
+    it('should wrap non-Error thrown values in Error', async () => {
+      sqsMock.on(SendMessageCommand).callsFake(() => {
+        throw 'string-sqs-error'
+      })
+
+      const publisher = createSQSPublisher<{ id: string }>(
+        { queueUrl: 'http://queue.url' },
+        logger,
+      )
+
+      const result = await publisher.publish(
+        { id: 'msg-non-err' },
+        { eventType: 'test.event', correlationId: 'corr-non-err' },
+      )
+
+      expect(result.isFailure).toBe(true)
+      expect(result.error).toBeInstanceOf(Error)
+      expect(result.error.message).toBe('string-sqs-error')
+    })
+  })
+
+  describe('publishBatch() error handling', () => {
+    it('should fail when correlationId is missing in batch', async () => {
+      const publisher = createSQSPublisher<{ id: string }>(
+        { queueUrl: 'http://queue.url' },
+        logger,
+      )
+
+      const result = await publisher.publishBatch([{ id: 'msg-1' }], {
+        eventType: 'test.event',
+        correlationId: '',
+      })
+
+      expect(result.isFailure).toBe(true)
+      expect(result.error.message).toContain('correlationId is required')
+    })
+
+    it('should return failure when SQS batch send throws an Error', async () => {
+      sqsMock
+        .on(SendMessageBatchCommand)
+        .rejects(new Error('SQS batch timeout'))
+
+      const publisher = createSQSPublisher<{ id: string }>(
+        { queueUrl: 'http://queue.url' },
+        logger,
+      )
+
+      const result = await publisher.publishBatch([{ id: 'msg-1' }], {
+        eventType: 'test.event',
+        correlationId: 'corr-batch-err',
+      })
+
+      expect(result.isFailure).toBe(true)
+      expect(result.error.message).toBe('SQS batch timeout')
+      expect(logger.error).toHaveBeenCalled()
+    })
+
+    it('should wrap non-Error thrown values in Error for batch', async () => {
+      sqsMock
+        .on(SendMessageBatchCommand)
+        .rejects(new Error('batch network error'))
+
+      const publisher = createSQSPublisher<{ id: string }>(
+        { queueUrl: 'http://queue.url' },
+        logger,
+      )
+
+      const result = await publisher.publishBatch([{ id: 'msg-1' }], {
+        eventType: 'test.event',
+        correlationId: 'corr-batch-non-err',
+      })
+
+      expect(result.isFailure).toBe(true)
+      expect(result.error).toBeInstanceOf(Error)
+      expect(result.error.message).toBe('batch network error')
+    })
+
+    it('should use custom source from config when options.source is not provided', async () => {
+      sqsMock.on(SendMessageBatchCommand).resolves({
+        Successful: [{ Id: '0', MessageId: 'msg-0' }],
+        Failed: [],
+      })
+
+      const publisher = createSQSPublisher<{ id: string }>(
+        { queueUrl: 'http://queue.url', source: 'custom-batch-source' },
+        logger,
+      )
+
+      const result = await publisher.publishBatch([{ id: 'msg-1' }], {
+        eventType: 'test.event',
+        correlationId: 'corr-source',
+      })
+
+      expect(result.isSuccess).toBe(true)
+
+      const calls = sqsMock.commandCalls(SendMessageBatchCommand)
+      const body = JSON.parse(calls[0].args[0].input.Entries![0].MessageBody!)
+      expect(body.metadata.source).toBe('custom-batch-source')
+    })
+  })
 })
