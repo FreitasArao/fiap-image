@@ -62,6 +62,52 @@ describe('SensitiveDataMasker', () => {
     expect(masked.PassWord).toBe('Case***')
   })
 
+  describe('maskValue()', () => {
+    it('should return mask suffix for null value', () => {
+      const result = SensitiveDataMasker.maskValue(null)
+      expect(result).toBe('***')
+    })
+
+    it('should return mask suffix for undefined value', () => {
+      const result = SensitiveDataMasker.maskValue(undefined)
+      expect(result).toBe('***')
+    })
+
+    it('should return mask suffix for short values (≤4 chars)', () => {
+      expect(SensitiveDataMasker.maskValue('ab')).toBe('***')
+      expect(SensitiveDataMasker.maskValue('abcd')).toBe('***')
+    })
+
+    it('should mask and keep first 4 chars for longer values', () => {
+      expect(SensitiveDataMasker.maskValue('abcde')).toBe('abcd***')
+    })
+
+    it('should convert non-string values to string before masking', () => {
+      expect(SensitiveDataMasker.maskValue(123456)).toBe('1234***')
+    })
+  })
+
+  it('should return data as-is when input is falsy', () => {
+    const result = SensitiveDataMasker.mask(null as any)
+    expect(result).toBeNull()
+  })
+
+  it('should return data as-is when input is not an object', () => {
+    const result = SensitiveDataMasker.mask('string' as any)
+    expect(result).toBe('string')
+  })
+
+  it('should preserve primitive values inside arrays', () => {
+    const data = {
+      tags: ['public', 'beta', 42],
+    }
+    const masked = SensitiveDataMasker.mask(data)
+    const tags = masked.tags as unknown[]
+    expect(tags[0]).toBe('public')
+    expect(tags[1]).toBe('beta')
+    expect(tags[2]).toBe(42)
+  })
+
   describe('addSensitiveKeys()', () => {
     it('should mask values for newly added custom sensitive keys', () => {
       SensitiveDataMasker.addSensitiveKeys(['ssn', 'credit_card'])

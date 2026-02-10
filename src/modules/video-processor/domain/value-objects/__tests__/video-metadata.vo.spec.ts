@@ -15,4 +15,54 @@ describe('VideoMetadataVO', () => {
     expect(videoMetadata.value.filename).toBe('test')
     expect(videoMetadata.value.extension).toBe('mp4')
   })
+
+  it('should return the filename via getter', () => {
+    const vo = VideoMetadataVO.create({
+      totalSize: 500,
+      durationMs: 2000,
+      filename: 'my-video',
+      extension: 'avi',
+    })
+    expect(vo.filename).toBe('my-video')
+  })
+
+  it('should return the extension via getter', () => {
+    const vo = VideoMetadataVO.create({
+      totalSize: 500,
+      durationMs: 2000,
+      filename: 'my-video',
+      extension: 'mkv',
+    })
+    expect(vo.extension).toBe('mkv')
+  })
+
+  it('should return the full filename with extension', () => {
+    const vo = VideoMetadataVO.create({
+      totalSize: 500,
+      durationMs: 2000,
+      filename: 'my-video',
+      extension: 'mp4',
+    })
+    expect(vo.fullFilename).toBe('my-video.mp4')
+  })
+
+  it('should return duration in milliseconds via durationMs getter', () => {
+    const vo = VideoMetadataVO.create({
+      totalSize: 500,
+      durationMs: 3500,
+      filename: 'clip',
+      extension: 'mp4',
+    })
+    expect(vo.durationMs).toBe(3500)
+  })
+
+  it('should return duration in seconds via durationSeconds getter', () => {
+    const vo = VideoMetadataVO.create({
+      totalSize: 500,
+      durationMs: 5000,
+      filename: 'clip',
+      extension: 'mp4',
+    })
+    expect(vo.durationSeconds).toBe(5)
+  })
 })
