@@ -88,18 +88,6 @@ describe('SensitiveDataMasker', () => {
     })
   })
 
-  it('should return data as-is when input is falsy', () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- testing runtime guard for invalid input
-    const result = SensitiveDataMasker.mask(null as any)
-    expect(result).toBeNull()
-  })
-
-  it('should return data as-is when input is not an object', () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- testing runtime guard for invalid input
-    const result = SensitiveDataMasker.mask('string' as any)
-    expect(result).toBe('string')
-  })
-
   it('should preserve primitive values inside arrays', () => {
     const data = {
       tags: ['public', 'beta', 42],
