@@ -80,5 +80,6 @@ jobs:
 
       - name: Update deployment
         run: |
-          kubectl set image deployment/fiap-image-api-deployment \
-            fiap-image-api=${{ steps.login-ecr.outputs.registry }}/fiap/image-api:${{ github.sha }}
+          kubectl set image deployment/api \
+            api=${{ steps.login-ecr.outputs.registry }}/fiap/image-api:${{ github.sha }} \
+            -n fiap
