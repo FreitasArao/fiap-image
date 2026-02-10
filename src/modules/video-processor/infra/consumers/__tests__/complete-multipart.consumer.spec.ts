@@ -155,9 +155,8 @@ describe('CompleteMultipartMessageHandler', () => {
       const event = createS3Event('bucket/video/video-123/video.mp4')
       const msgContext = createContext()
 
-      await CorrelationStore.run(
-        { correlationId: 'default-corr' },
-        () => messageHandler.handle(event, msgContext),
+      await CorrelationStore.run({ correlationId: 'default-corr' }, () =>
+        messageHandler.handle(event, msgContext),
       )
 
       expect(handleSpy).toHaveBeenCalledWith(event)

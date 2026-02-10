@@ -27,7 +27,9 @@ export class EventBridgeEmitter implements EventBusEmitter {
     // Prefer implicit correlationId from CorrelationStore (set by SQS consumer)
     // Fallback to explicit correlationId from event payload
     const correlationId =
-      CorrelationStore.correlationId ?? event.correlationId ?? crypto.randomUUID()
+      CorrelationStore.correlationId ??
+      event.correlationId ??
+      crypto.randomUUID()
     const traceId =
       CorrelationStore.traceId ?? event.traceId ?? crypto.randomUUID()
 

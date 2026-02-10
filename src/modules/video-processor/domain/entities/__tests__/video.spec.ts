@@ -6,7 +6,6 @@ import { UniqueEntityID } from '@core/domain/value-objects/unique-entity-id.vo'
 import { VideoMetadataVO } from '@modules/video-processor/domain/value-objects/video-metadata.vo'
 import { VideoStatusVO } from '@modules/video-processor/domain/value-objects/video-status.vo'
 import { MegabytesValueObject } from '@modules/video-processor/domain/value-objects/megabytes.vo'
-import { VideoThirdPartyIntegrationsMetadataVO } from '@modules/video-processor/domain/value-objects/video-third-party-integrations-metadata.vo'
 
 function makeMetadata() {
   return VideoMetadataVO.create({
@@ -18,7 +17,10 @@ function makeMetadata() {
 }
 
 function makeVideo() {
-  return Video.create({ metadata: makeMetadata(), userId: UniqueEntityID.create() })
+  return Video.create({
+    metadata: makeMetadata(),
+    userId: UniqueEntityID.create(),
+  })
 }
 
 function makePart(videoId: UniqueEntityID, partNumber: number, url = '') {
@@ -112,7 +114,9 @@ describe('Video', () => {
       const result = video.startSplitting()
       expect(result.isSuccess).toBe(true)
       expect(video.status.value).toBe('SPLITTING')
-      expect(video.domainEvents.some((e) => e.eventName === 'VideoSplitting')).toBe(true)
+      expect(
+        video.domainEvents.some((e) => e.eventName === 'VideoSplitting'),
+      ).toBe(true)
     })
 
     it('should return failure when startSplitting from invalid state', () => {
@@ -130,7 +134,9 @@ describe('Video', () => {
       const result = video.startPrinting()
       expect(result.isSuccess).toBe(true)
       expect(video.status.value).toBe('PRINTING')
-      expect(video.domainEvents.some((e) => e.eventName === 'VideoPrinting')).toBe(true)
+      expect(
+        video.domainEvents.some((e) => e.eventName === 'VideoPrinting'),
+      ).toBe(true)
     })
 
     it('should return failure when startPrinting from invalid state', () => {

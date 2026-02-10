@@ -32,21 +32,30 @@ export class FFmpegProcessor implements VideoProcessorService {
     const mkdirProc = Bun.spawn(['mkdir', '-p', outputDir])
     await mkdirProc.exited
 
-    const proc = Bun.spawn([
-      'ffmpeg',
-      '-ss',
-      String(startTime),
-      '-to',
-      String(endTime),
-      '-i',
-      inputUrl,
-      '-vf',
-      `fps=1/${frameInterval}`,
-      '-q:v',
-      '2',
-      `${outputDir}/frame_%04d.jpg`,
-      '-y',
-    ])
+    let proc: ReturnType<typeof Bun.spawn>
+    try {
+      proc = Bun.spawn([
+        'ffmpeg',
+        '-ss',
+        String(startTime),
+        '-to',
+        String(endTime),
+        '-i',
+        inputUrl,
+        '-vf',
+        `fps=1/${frameInterval}`,
+        '-q:v',
+        '2',
+        `${outputDir}/frame_%04d.jpg`,
+        '-y',
+      ])
+    } catch (err) {
+      return Result.fail(
+        new Error(
+          `FFmpeg failed: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      )
+    }
 
     await proc.exited
 

@@ -28,8 +28,9 @@ describe('SensitiveDataMasker', () => {
 
     const masked = SensitiveDataMasker.mask(data)
 
-    expect((masked.user as any).password).toBe('nest***')
-    expect((masked.user as any).profile.etag).toBe('1234***')
+    const maskedUser = masked.user as Record<string, unknown>
+    expect(maskedUser.password).toBe('nest***')
+    expect((maskedUser.profile as Record<string, unknown>).etag).toBe('1234***')
   })
 
   it('should mask values in arrays', () => {
@@ -38,7 +39,7 @@ describe('SensitiveDataMasker', () => {
     }
 
     const masked = SensitiveDataMasker.mask(data)
-    const items = masked.items as any[]
+    const items = masked.items as Record<string, unknown>[]
 
     expect(items[0].secret).toBe('item***')
     expect(items[1].secret).toBe('item***')
@@ -88,12 +89,16 @@ describe('SensitiveDataMasker', () => {
   })
 
   it('should return data as-is when input is falsy', () => {
-    const result = SensitiveDataMasker.mask(null as any)
+    const result = SensitiveDataMasker.mask(
+      null as unknown as Record<string, unknown>,
+    )
     expect(result).toBeNull()
   })
 
   it('should return data as-is when input is not an object', () => {
-    const result = SensitiveDataMasker.mask('string' as any)
+    const result = SensitiveDataMasker.mask(
+      'string' as unknown as Record<string, unknown>,
+    )
     expect(result).toBe('string')
   })
 

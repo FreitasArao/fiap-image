@@ -11,7 +11,9 @@ describe('PartSizePolicy', () => {
     })
 
     it('should return true for videos equal to MIN_PART_SIZE', () => {
-      expect(PartSizePolicy.isSmallVideo(PartSizePolicy.MIN_PART_SIZE)).toBe(true)
+      expect(PartSizePolicy.isSmallVideo(PartSizePolicy.MIN_PART_SIZE)).toBe(
+        true,
+      )
     })
 
     it('should return false for videos larger than MIN_PART_SIZE', () => {
@@ -26,7 +28,9 @@ describe('PartSizePolicy', () => {
       const result = PartSizePolicy.calculate(videoSize)
 
       expect(result.isSuccess).toBe(true)
-      expect(result.value.partSize).toBeGreaterThanOrEqual(PartSizePolicy.MIN_PART_SIZE)
+      expect(result.value.partSize).toBeGreaterThanOrEqual(
+        PartSizePolicy.MIN_PART_SIZE,
+      )
       expect(result.value.numberOfParts).toBeGreaterThan(0)
     })
 
@@ -35,7 +39,9 @@ describe('PartSizePolicy', () => {
       const result = PartSizePolicy.calculate(videoSize)
 
       expect(result.isSuccess).toBe(true)
-      expect(result.value.partSize).toBeGreaterThanOrEqual(PartSizePolicy.SAFE_PART_SIZE)
+      expect(result.value.partSize).toBeGreaterThanOrEqual(
+        PartSizePolicy.SAFE_PART_SIZE,
+      )
     })
 
     it('should fail when calculated part size exceeds MAX_PART_SIZE', () => {

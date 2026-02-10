@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
+import type { VideoStatus } from '@modules/video-processor/domain/value-objects/video-status.vo'
+
+type MockFn = ReturnType<typeof mock>
 import { ReconcileUploadService } from '../reconcile-upload.service'
 import { Video } from '@modules/video-processor/domain/entities/video'
 import { VideoMetadataVO } from '@modules/video-processor/domain/value-objects/video-metadata.vo'
@@ -34,7 +37,7 @@ function makeVideoInStatus(status: string): Video {
       filename: 'test',
       extension: 'mp4',
     }),
-    status: VideoStatusVO.create(status as any),
+    status: VideoStatusVO.create(status as VideoStatus),
     parts: [],
     thirdPartyVideoIntegration: VideoThirdPartyIntegrationsMetadataVO.create({
       uploadId: 'upload-123',
@@ -98,7 +101,7 @@ describe('ReconcileUploadService', () => {
 
   it('should skip when concurrent update is detected', async () => {
     const video = makeVideoInStatus('UPLOADING')
-    ;(videoRepository.transitionStatus as any).mockImplementation(
+    ;(videoRepository.transitionStatus as MockFn).mockImplementation(
       async () => false,
     )
 
@@ -129,7 +132,7 @@ describe('ReconcileUploadService', () => {
 
   it('should log error when event emission fails but still succeed', async () => {
     const video = makeVideoInStatus('UPLOADING')
-    ;(eventBridge.send as any).mockImplementation(async () =>
+    ;(eventBridge.send as MockFn).mockImplementation(async () =>
       Result.fail(new Error('EventBridge error')),
     )
 

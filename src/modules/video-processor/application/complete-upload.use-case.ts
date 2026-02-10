@@ -42,7 +42,9 @@ export class CompleteUploadUseCase {
     // Prefer implicit correlationId from CorrelationStore (set by HTTP middleware)
     // Fallback to explicit params for backwards compatibility
     const effectiveCorrelationId =
-      CorrelationStore.correlationId ?? params.correlationId ?? crypto.randomUUID()
+      CorrelationStore.correlationId ??
+      params.correlationId ??
+      crypto.randomUUID()
     const effectiveTraceId =
       CorrelationStore.traceId ?? params.traceId ?? crypto.randomUUID()
 

@@ -2,7 +2,10 @@ import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 import { PinoLoggerService } from '@core/libs/logging/pino-logger'
 import { CorrelationStore } from '@core/libs/context'
 import { context, trace } from '@opentelemetry/api'
-import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test'
+import type { Logger as PinoBaseLogger } from 'pino'
+import { beforeEach, describe, expect, it, mock } from 'bun:test'
+
+type MockFn = ReturnType<typeof mock>
 
 class TestService {
   constructor(public readonly logger: AbstractLoggerService) {}
@@ -54,7 +57,7 @@ describe('PinoLoggerService', () => {
       const logger = new PinoLoggerService(
         {},
         context.active(),
-        mockPino as any,
+        mockPino as unknown as PinoBaseLogger,
       )
 
       logger.debug('debug message', { key: 'value' })
@@ -74,12 +77,12 @@ describe('PinoLoggerService', () => {
       const logger = new PinoLoggerService(
         {},
         context.active(),
-        mockPino as any,
+        mockPino as unknown as PinoBaseLogger,
       )
 
       logger.debug('debug with extra', { someKey: 'someVal' })
 
-      const callArgs = (mockPino.debug as any).mock.calls[0]
+      const callArgs = (mockPino.debug as MockFn).mock.calls[0]
       expect(callArgs[0].extra).toBeDefined()
       expect(callArgs[1]).toBe('debug with extra')
     })
@@ -98,7 +101,7 @@ describe('PinoLoggerService', () => {
       const logger = new PinoLoggerService(
         {},
         context.active(),
-        mockPino as any,
+        mockPino as unknown as PinoBaseLogger,
       )
 
       logger.verbose('verbose message', { key: 'value' })
@@ -118,13 +121,13 @@ describe('PinoLoggerService', () => {
       const logger = new PinoLoggerService(
         {},
         context.active(),
-        mockPino as any,
+        mockPino as unknown as PinoBaseLogger,
         'VerboseCtx',
       )
 
       logger.verbose('verbose with context')
 
-      const callArgs = (mockPino.trace as any).mock.calls[0]
+      const callArgs = (mockPino.trace as MockFn).mock.calls[0]
       expect(callArgs[0].context).toBe('VerboseCtx')
     })
   })
@@ -147,10 +150,7 @@ describe('PinoLoggerService', () => {
 
       const ctx = trace.setSpan(context.active(), span)
 
-      const logger = new PinoLoggerService(
-        { suppressConsole: true },
-        ctx,
-      )
+      const logger = new PinoLoggerService({ suppressConsole: true }, ctx)
 
       const traceId = logger.getTraceIdFromContext()
       expect(traceId).toBe(spanContext.traceId)
@@ -163,7 +163,7 @@ describe('PinoLoggerService', () => {
     it('should include correlationId from CorrelationStore', () => {
       const captured: Record<string, unknown>[] = []
 
-      const mockPino = {
+      const _mockPino = {
         info: mock((...args: unknown[]) => {
           captured.push(args[0] as Record<string, unknown>)
         }),
@@ -176,13 +176,14 @@ describe('PinoLoggerService', () => {
       // Create logger WITHOUT loggerInstance to trigger mixin creation
       // But we need a real pino for mixin to work
       // Instead, we test by creating a real logger and verifying no errors
-      const logger = new PinoLoggerService(
-        {},
-        context.active(),
-      )
+      const logger = new PinoLoggerService({}, context.active())
 
       CorrelationStore.run(
-        { correlationId: 'corr-mixin-test', traceId: 'trace-mixin', spanId: 'span-mixin' },
+        {
+          correlationId: 'corr-mixin-test',
+          traceId: 'trace-mixin',
+          spanId: 'span-mixin',
+        },
         () => {
           // This triggers the real pino logger which calls mixin
           logger.log('mixin test message')
@@ -198,10 +199,7 @@ describe('PinoLoggerService', () => {
       const span = tracer.startSpan('test-span')
       const ctx = trace.setSpan(context.active(), span)
 
-      const logger = new PinoLoggerService(
-        {},
-        ctx,
-      )
+      const logger = new PinoLoggerService({}, ctx)
 
       // This triggers mixin with otel context but no CorrelationStore
       logger.log('otel fallback mixin test')
@@ -212,10 +210,7 @@ describe('PinoLoggerService', () => {
     })
 
     it('should execute mixin with empty context when neither correlation nor otel exists', () => {
-      const logger = new PinoLoggerService(
-        {},
-        context.active(),
-      )
+      const logger = new PinoLoggerService({}, context.active())
 
       logger.log('no context mixin test')
 
@@ -236,7 +231,7 @@ describe('PinoLoggerService', () => {
       const logger = new PinoLoggerService(
         {},
         context.active(),
-        mockPino as any,
+        mockPino as unknown as PinoBaseLogger,
       )
 
       const scoped = logger.withContext('ScopedService')

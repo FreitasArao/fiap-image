@@ -32,7 +32,12 @@ describe('EventBridgeEmitter', () => {
     const calls = eventBridgeMock.commandCalls(PutEventsCommand)
     const entry = calls[callIndex].args[0].input.Entries?.[0]
     const envelope = JSON.parse(entry?.Detail ?? '{}')
-    return { entry, envelope, payload: envelope.payload, metadata: envelope.metadata }
+    return {
+      entry,
+      envelope,
+      payload: envelope.payload,
+      metadata: envelope.metadata,
+    }
   }
 
   describe('emitVideoStatusChanged', () => {
@@ -67,14 +72,12 @@ describe('EventBridgeEmitter', () => {
     it('should emit PROCESSING status', async () => {
       eventBridgeMock.on(PutEventsCommand).resolves({})
 
-      await CorrelationStore.run(
-        { correlationId: 'corr-123' },
-        () =>
-          emitter.emitVideoStatusChanged({
-            videoId: 'video-123',
-            status: 'PROCESSING',
-            correlationId: 'corr-123',
-          }),
+      await CorrelationStore.run({ correlationId: 'corr-123' }, () =>
+        emitter.emitVideoStatusChanged({
+          videoId: 'video-123',
+          status: 'PROCESSING',
+          correlationId: 'corr-123',
+        }),
       )
 
       const { payload } = getEnvelopeFromCall()
@@ -84,15 +87,13 @@ describe('EventBridgeEmitter', () => {
     it('should emit FAILED status with errorReason', async () => {
       eventBridgeMock.on(PutEventsCommand).resolves({})
 
-      await CorrelationStore.run(
-        { correlationId: 'corr-123' },
-        () =>
-          emitter.emitVideoStatusChanged({
-            videoId: 'video-123',
-            status: 'FAILED',
-            correlationId: 'corr-123',
-            errorReason: 'Video file not found',
-          }),
+      await CorrelationStore.run({ correlationId: 'corr-123' }, () =>
+        emitter.emitVideoStatusChanged({
+          videoId: 'video-123',
+          status: 'FAILED',
+          correlationId: 'corr-123',
+          errorReason: 'Video file not found',
+        }),
       )
 
       const { payload } = getEnvelopeFromCall()
@@ -137,14 +138,12 @@ describe('EventBridgeEmitter', () => {
 
       const before = new Date().toISOString()
 
-      await CorrelationStore.run(
-        { correlationId: 'corr-123' },
-        () =>
-          emitter.emitVideoStatusChanged({
-            videoId: 'video-123',
-            status: 'COMPLETED',
-            correlationId: 'corr-123',
-          }),
+      await CorrelationStore.run({ correlationId: 'corr-123' }, () =>
+        emitter.emitVideoStatusChanged({
+          videoId: 'video-123',
+          status: 'COMPLETED',
+          correlationId: 'corr-123',
+        }),
       )
 
       const after = new Date().toISOString()

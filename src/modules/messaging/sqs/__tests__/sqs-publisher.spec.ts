@@ -7,7 +7,6 @@ import {
 } from '@aws-sdk/client-sqs'
 import { createSQSPublisher } from '../abstract-sqs-publisher'
 import { TracingProviderStub } from '@core/messaging/__tests__/tracing-provider.stub'
-import { EnvelopeFactory } from '@core/messaging'
 import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 
 const sqsMock = mockClient(SQSClient)
@@ -299,7 +298,8 @@ describe('AbstractSQSPublisher', () => {
       expect(result.isSuccess).toBe(true)
 
       const calls = sqsMock.commandCalls(SendMessageBatchCommand)
-      const body = JSON.parse(calls[0].args[0].input.Entries![0].MessageBody!)
+      const entries = calls[0].args[0].input.Entries ?? []
+      const body = JSON.parse(entries[0].MessageBody ?? '{}')
       expect(body.metadata.source).toBe('custom-batch-source')
     })
   })

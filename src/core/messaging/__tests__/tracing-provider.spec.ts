@@ -1,13 +1,8 @@
 import { describe, it, expect, mock } from 'bun:test'
-import {
-  trace,
-  context,
-  type Span,
-  type SpanContext,
-  type Tracer,
-  type Context,
-} from '@opentelemetry/api'
+import { trace, context, type Span, type SpanContext } from '@opentelemetry/api'
 import { OpenTelemetryTracingProvider } from '../tracing-provider'
+
+type MutableTrace = Record<string, unknown>
 
 describe('OpenTelemetryTracingProvider', () => {
   it('should return null when no active span exists', () => {
@@ -144,32 +139,32 @@ describe('OpenTelemetryTracingProvider', () => {
       // Override trace.getSpan temporarily using the provider's method inline
       const originalGetSpan = trace.getSpan
       try {
-        ;(trace as any).getSpan = () => fakeSpan
+        ;(trace as MutableTrace).getSpan = () => fakeSpan
 
         const result = provider.getActiveContext()
 
         expect(result).not.toBeNull()
-        expect(result!.traceId).toBe('trace-abc-123')
-        expect(result!.spanId).toBe('span-xyz-789')
+        expect(result?.traceId).toBe('trace-abc-123')
+        expect(result?.spanId).toBe('span-xyz-789')
       } finally {
-        ;(trace as any).getSpan = originalGetSpan
+        ;(trace as MutableTrace).getSpan = originalGetSpan
       }
     })
 
     it('should return null when spanContext is falsy (line 18)', () => {
       const fakeSpan = {
-        spanContext: () => null as any,
+        spanContext: () => null as unknown as SpanContext,
       } as unknown as Span
 
       const provider = new OpenTelemetryTracingProvider()
       const originalGetSpan = trace.getSpan
       try {
-        ;(trace as any).getSpan = () => fakeSpan
+        ;(trace as MutableTrace).getSpan = () => fakeSpan
 
         const result = provider.getActiveContext()
         expect(result).toBeNull()
       } finally {
-        ;(trace as any).getSpan = originalGetSpan
+        ;(trace as MutableTrace).getSpan = originalGetSpan
       }
     })
 
@@ -181,12 +176,12 @@ describe('OpenTelemetryTracingProvider', () => {
       const provider = new OpenTelemetryTracingProvider()
       const originalGetSpan = trace.getSpan
       try {
-        ;(trace as any).getSpan = () => fakeSpan
+        ;(trace as MutableTrace).getSpan = () => fakeSpan
 
         const result = provider.getActiveContext()
         expect(result).toBeNull()
       } finally {
-        ;(trace as any).getSpan = originalGetSpan
+        ;(trace as MutableTrace).getSpan = originalGetSpan
       }
     })
 
@@ -202,12 +197,12 @@ describe('OpenTelemetryTracingProvider', () => {
       const provider = new OpenTelemetryTracingProvider()
       const originalGetSpan = trace.getSpan
       try {
-        ;(trace as any).getSpan = () => fakeSpan
+        ;(trace as MutableTrace).getSpan = () => fakeSpan
 
         const result = provider.getActiveContext()
         expect(result).toBeNull()
       } finally {
-        ;(trace as any).getSpan = originalGetSpan
+        ;(trace as MutableTrace).getSpan = originalGetSpan
       }
     })
 
@@ -215,12 +210,12 @@ describe('OpenTelemetryTracingProvider', () => {
       const provider = new OpenTelemetryTracingProvider()
       const originalGetSpan = trace.getSpan
       try {
-        ;(trace as any).getSpan = () => undefined
+        ;(trace as MutableTrace).getSpan = () => undefined
 
         const result = provider.getActiveContext()
         expect(result).toBeNull()
       } finally {
-        ;(trace as any).getSpan = originalGetSpan
+        ;(trace as MutableTrace).getSpan = originalGetSpan
       }
     })
   })

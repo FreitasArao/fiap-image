@@ -87,7 +87,7 @@ export class InMemoryVideoRepository implements VideoRepository {
   async transitionStatus(
     videoId: string,
     expectedStatus: VideoStatus,
-    newStatus: VideoStatus,
+    _newStatus: VideoStatus,
   ): Promise<boolean> {
     const index = this.items.findIndex((v) => v.id.value === videoId)
     if (index === -1) {

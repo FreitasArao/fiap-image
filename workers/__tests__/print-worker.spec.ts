@@ -11,10 +11,7 @@ import type {
   EventBusEmitter,
   VideoStatusChangedEvent,
 } from '@core/abstractions/messaging'
-import type {
-  VideoProcessorService,
-  ExtractFramesResult,
-} from '@workers/abstractions'
+import type { VideoProcessorService } from '@workers/abstractions'
 import {
   SegmentEventHandler,
   type PrintWorkerDeps,

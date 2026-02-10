@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
+
+type MockFn = ReturnType<typeof mock>
 import { SqsUploadReconciler } from '../sqs-upload-reconciler.service'
 import { ReconcileUploadService } from '../reconcile-upload.service'
 import { Video } from '@modules/video-processor/domain/entities/video'
@@ -92,7 +94,7 @@ describe('SqsUploadReconciler', () => {
   })
 
   it('should return video_not_found when no video matches objectKey', async () => {
-    ;(videoRepository.findByObjectKey as any).mockImplementation(async () =>
+    ;(videoRepository.findByObjectKey as MockFn).mockImplementation(async () =>
       Result.ok(null),
     )
 
@@ -108,7 +110,7 @@ describe('SqsUploadReconciler', () => {
   })
 
   it('should propagate repository failure', async () => {
-    ;(videoRepository.findByObjectKey as any).mockImplementation(async () =>
+    ;(videoRepository.findByObjectKey as MockFn).mockImplementation(async () =>
       Result.fail(new Error('DB error')),
     )
 
@@ -137,8 +139,12 @@ describe('SqsUploadReconciler', () => {
   })
 
   it('should not persist parts when reconciliation is skipped', async () => {
-    ;(reconcileService.reconcile as any).mockImplementation(async () =>
-      Result.ok({ skipped: true, reason: 'already_processed', videoId: 'vid-1' }),
+    ;(reconcileService.reconcile as MockFn).mockImplementation(async () =>
+      Result.ok({
+        skipped: true,
+        reason: 'already_processed',
+        videoId: 'vid-1',
+      }),
     )
 
     const result = await reconciler.execute({
@@ -153,7 +159,7 @@ describe('SqsUploadReconciler', () => {
   })
 
   it('should propagate reconcile service failure', async () => {
-    ;(reconcileService.reconcile as any).mockImplementation(async () =>
+    ;(reconcileService.reconcile as MockFn).mockImplementation(async () =>
       Result.fail(new Error('reconcile failed')),
     )
 

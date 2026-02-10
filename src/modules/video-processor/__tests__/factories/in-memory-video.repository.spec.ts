@@ -48,7 +48,7 @@ describe('InMemoryVideoRepository', () => {
       expect(result.isSuccess).toBe(true)
 
       const found = await repository.findById(video.id.value)
-      expect(found.value!.parts.length).toBe(1)
+      expect(found.value?.parts.length).toBe(1)
     })
 
     it('should be no-op when video is not found', async () => {
@@ -79,7 +79,7 @@ describe('InMemoryVideoRepository', () => {
       await repository.createVideo(video)
 
       const result = await repository.findByIntegrationId(
-        video.thirdPartyVideoIntegration!.uploadId,
+        video.thirdPartyVideoIntegration?.uploadId,
       )
       expect(result.isSuccess).toBe(true)
       expect(result.value).toBe(video)
@@ -97,7 +97,7 @@ describe('InMemoryVideoRepository', () => {
       const video = VideoFactory.create()
       await repository.createVideo(video)
 
-      const objectKey = video.thirdPartyVideoIntegration!.key
+      const objectKey = video.thirdPartyVideoIntegration?.key
       const result = await repository.findByObjectKey(objectKey)
       expect(result.isSuccess).toBe(true)
       expect(result.value).toBe(video)

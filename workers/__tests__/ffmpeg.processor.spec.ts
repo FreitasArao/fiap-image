@@ -7,6 +7,15 @@ import type { VideoProcessorService } from '@workers/abstractions'
 const fixturePath = join(import.meta.dir, 'fixtures', 'fake-video.mp4')
 const hasVideoFixture = existsSync(fixturePath)
 
+const hasFFmpeg = (() => {
+  try {
+    const proc = Bun.spawnSync(['which', 'ffmpeg'])
+    return proc.exitCode === 0
+  } catch {
+    return false
+  }
+})()
+
 describe('FFmpegProcessor', () => {
   let processor: VideoProcessorService
   const videoId = 'test-video-123'
@@ -45,7 +54,7 @@ describe('FFmpegProcessor', () => {
   })
 
   describe('extractFramesFromUrl', () => {
-    it.skipIf(!hasVideoFixture)(
+    it.skipIf(!hasVideoFixture || !hasFFmpeg)(
       'should return success Result with frames from url',
       async () => {
         await processor.setup()
@@ -62,7 +71,7 @@ describe('FFmpegProcessor', () => {
       },
     )
 
-    it.skipIf(!hasVideoFixture)(
+    it.skipIf(!hasVideoFixture || !hasFFmpeg)(
       'should extract 6 frames with lower frameInterval',
       async () => {
         await processor.setup()
@@ -79,31 +88,37 @@ describe('FFmpegProcessor', () => {
       },
     )
 
-    it('should return failure Result when input file does not exist', async () => {
-      await processor.setup()
-      const result = await processor.extractFramesFromUrl(
-        '/non/existent/file.mp4',
-        0,
-        10,
-        1,
-      )
+    it.skipIf(!hasFFmpeg)(
+      'should return failure Result when input file does not exist',
+      async () => {
+        await processor.setup()
+        const result = await processor.extractFramesFromUrl(
+          '/non/existent/file.mp4',
+          0,
+          10,
+          1,
+        )
 
-      expect(result.isFailure).toBe(true)
-      expect(result.error.message).toContain('FFmpeg failed')
-    })
+        expect(result.isFailure).toBe(true)
+        expect(result.error.message).toContain('FFmpeg failed')
+      },
+    )
 
-    it('should return failure Result when input URL is invalid', async () => {
-      await processor.setup()
-      const result = await processor.extractFramesFromUrl(
-        'not-a-valid-url',
-        0,
-        10,
-        1,
-      )
+    it.skipIf(!hasFFmpeg)(
+      'should return failure Result when input URL is invalid',
+      async () => {
+        await processor.setup()
+        const result = await processor.extractFramesFromUrl(
+          'not-a-valid-url',
+          0,
+          10,
+          1,
+        )
 
-      expect(result.isFailure).toBe(true)
-      expect(result.error.message).toContain('FFmpeg failed')
-    })
+        expect(result.isFailure).toBe(true)
+        expect(result.error.message).toContain('FFmpeg failed')
+      },
+    )
   })
 
   describe('uploadDir', () => {

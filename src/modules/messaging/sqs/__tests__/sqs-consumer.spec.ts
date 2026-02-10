@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, mock, spyOn } from 'bun:test'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import type { MessageHandler, MessageContext } from '@core/messaging'
 import { Result } from '@core/domain/result'
 import { NonRetryableError } from '@core/errors/non-retryable.error'
@@ -8,6 +8,8 @@ import {
 } from '../abstract-sqs-consumer'
 import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
 import type { Message } from '@aws-sdk/client-sqs'
+
+type MockFn = ReturnType<typeof mock>
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -101,8 +103,11 @@ class TestMessageHandler implements MessageHandler<TestPayload> {
 // ─── Mock infrastructure ──────────────────────────────────────────────────────
 
 // Capture the Consumer.create handleMessage callback and event listeners
-let capturedHandleMessage: ((message: Message) => Promise<Message | undefined>) | null = null
-const capturedEventListeners: Record<string, ((...args: unknown[]) => void)[]> = {}
+let capturedHandleMessage:
+  | ((message: Message) => Promise<Message | undefined>)
+  | null = null
+const capturedEventListeners: Record<string, ((...args: unknown[]) => void)[]> =
+  {}
 
 const mockConsumerInstance = {
   on: mock((event: string, handler: (...args: unknown[]) => void) => {
@@ -119,10 +124,14 @@ const mockConsumerInstance = {
 // Mock the sqs-consumer module
 mock.module('sqs-consumer', () => ({
   Consumer: {
-    create: mock((opts: any) => {
-      capturedHandleMessage = opts.handleMessage
-      return mockConsumerInstance
-    }),
+    create: mock(
+      (opts: {
+        handleMessage: (message: Message) => Promise<Message | undefined>
+      }) => {
+        capturedHandleMessage = opts.handleMessage
+        return mockConsumerInstance
+      },
+    ),
   },
 }))
 
@@ -137,9 +146,9 @@ describe('AbstractSQSConsumer', () => {
     for (const key of Object.keys(capturedEventListeners)) {
       delete capturedEventListeners[key]
     }
-    ;(mockConsumerInstance.on as any).mockClear()
-    ;(mockConsumerInstance.start as any).mockClear()
-    ;(mockConsumerInstance.stop as any).mockClear()
+    ;(mockConsumerInstance.on as MockFn).mockClear()
+    ;(mockConsumerInstance.start as MockFn).mockClear()
+    ;(mockConsumerInstance.stop as MockFn).mockClear()
     mockConsumerInstance.status = { isRunning: false }
 
     logger = makeLogger()
@@ -215,11 +224,11 @@ describe('AbstractSQSConsumer', () => {
         handler,
       )
 
-      expect(capturedEventListeners['error']).toBeDefined()
-      expect(capturedEventListeners['error'].length).toBeGreaterThan(0)
+      expect(capturedEventListeners.error).toBeDefined()
+      expect(capturedEventListeners.error.length).toBeGreaterThan(0)
 
       // Trigger the listener
-      capturedEventListeners['error'][0](new Error('test error'))
+      capturedEventListeners.error[0](new Error('test error'))
       expect(logger.error).toHaveBeenCalled()
     })
 
@@ -230,11 +239,9 @@ describe('AbstractSQSConsumer', () => {
         handler,
       )
 
-      expect(capturedEventListeners['processing_error']).toBeDefined()
+      expect(capturedEventListeners.processing_error).toBeDefined()
 
-      capturedEventListeners['processing_error'][0](
-        new Error('processing error'),
-      )
+      capturedEventListeners.processing_error[0](new Error('processing error'))
       expect(logger.error).toHaveBeenCalled()
     })
 
@@ -245,9 +252,9 @@ describe('AbstractSQSConsumer', () => {
         handler,
       )
 
-      expect(capturedEventListeners['timeout_error']).toBeDefined()
+      expect(capturedEventListeners.timeout_error).toBeDefined()
 
-      capturedEventListeners['timeout_error'][0](new Error('timeout'))
+      capturedEventListeners.timeout_error[0](new Error('timeout'))
       expect(logger.error).toHaveBeenCalled()
     })
 
@@ -258,9 +265,9 @@ describe('AbstractSQSConsumer', () => {
         handler,
       )
 
-      expect(capturedEventListeners['started']).toBeDefined()
+      expect(capturedEventListeners.started).toBeDefined()
 
-      capturedEventListeners['started'][0]()
+      capturedEventListeners.started[0]()
       expect(logger.log).toHaveBeenCalled()
     })
 
@@ -271,9 +278,9 @@ describe('AbstractSQSConsumer', () => {
         handler,
       )
 
-      expect(capturedEventListeners['stopped']).toBeDefined()
+      expect(capturedEventListeners.stopped).toBeDefined()
 
-      capturedEventListeners['stopped'][0]()
+      capturedEventListeners.stopped[0]()
       expect(logger.log).toHaveBeenCalled()
     })
   })
@@ -292,7 +299,7 @@ describe('AbstractSQSConsumer', () => {
         Body: JSON.stringify(envelope),
       }
 
-      const result = await capturedHandleMessage!(message)
+      const result = await capturedHandleMessage?.(message)
 
       expect(result).toBe(message)
       expect(handler.parsedPayloads.length).toBe(1)
@@ -322,12 +329,12 @@ describe('AbstractSQSConsumer', () => {
         Body: JSON.stringify(eventBridgeEvent),
       }
 
-      const result = await capturedHandleMessage!(message)
+      const result = await capturedHandleMessage?.(message)
 
       expect(result).toBe(message)
       expect(handler.parsedPayloads.length).toBe(1)
       // The payload should be the full eventBridge event with detail replaced
-      const parsedPayload = handler.parsedPayloads[0] as any
+      const parsedPayload = handler.parsedPayloads[0] as Record<string, unknown>
       expect(parsedPayload.source).toBe('aws.events')
       expect(parsedPayload.detail).toEqual({ id: 'eb-1', value: 99 })
     })
@@ -345,7 +352,7 @@ describe('AbstractSQSConsumer', () => {
       }
 
       // Body defaults to '{}' which won't match envelope — should throw
-      await expect(capturedHandleMessage!(message)).rejects.toThrow()
+      await expect(capturedHandleMessage?.(message)).rejects.toThrow()
     })
 
     it('should throw when body is not in envelope format and has no EventBridge detail', async () => {
@@ -360,7 +367,7 @@ describe('AbstractSQSConsumer', () => {
         Body: JSON.stringify({ random: 'data' }),
       }
 
-      await expect(capturedHandleMessage!(message)).rejects.toThrow(
+      await expect(capturedHandleMessage?.(message)).rejects.toThrow(
         'Message is not in envelope format and has no EventBridge detail',
       )
     })
@@ -377,7 +384,7 @@ describe('AbstractSQSConsumer', () => {
         Body: JSON.stringify({ detail: { invalid: 'not-envelope' } }),
       }
 
-      await expect(capturedHandleMessage!(message)).rejects.toThrow(
+      await expect(capturedHandleMessage?.(message)).rejects.toThrow(
         'EventBridge detail is not in envelope format',
       )
     })
@@ -397,7 +404,7 @@ describe('AbstractSQSConsumer', () => {
         Body: JSON.stringify(envelope),
       }
 
-      const result = await capturedHandleMessage!(message)
+      const result = await capturedHandleMessage?.(message)
 
       expect(result).toBe(message)
       expect(logger.warn).toHaveBeenCalled()
@@ -418,7 +425,7 @@ describe('AbstractSQSConsumer', () => {
         Body: JSON.stringify(envelope),
       }
 
-      const result = await capturedHandleMessage!(message)
+      const result = await capturedHandleMessage?.(message)
 
       expect(result).toBe(message)
       expect(logger.warn).toHaveBeenCalled()
@@ -439,7 +446,7 @@ describe('AbstractSQSConsumer', () => {
         Body: JSON.stringify(envelope),
       }
 
-      await expect(capturedHandleMessage!(message)).rejects.toThrow(
+      await expect(capturedHandleMessage?.(message)).rejects.toThrow(
         'Handle failed',
       )
       expect(logger.error).toHaveBeenCalled()
@@ -460,7 +467,7 @@ describe('AbstractSQSConsumer', () => {
         Body: JSON.stringify(envelope),
       }
 
-      await expect(capturedHandleMessage!(message)).rejects.toThrow(
+      await expect(capturedHandleMessage?.(message)).rejects.toThrow(
         'Unexpected boom',
       )
       expect(logger.error).toHaveBeenCalled()
@@ -486,7 +493,7 @@ describe('AbstractSQSConsumer', () => {
         Body: JSON.stringify(envelope),
       }
 
-      await expect(capturedHandleMessage!(message)).rejects.toThrow()
+      await expect(capturedHandleMessage?.(message)).rejects.toThrow()
       expect(logger.error).toHaveBeenCalled()
     })
 
@@ -497,7 +504,7 @@ describe('AbstractSQSConsumer', () => {
         handler,
       )
 
-      const envelope = makeEnvelope(
+      const _envelope = makeEnvelope(
         { id: 'test-1', value: 42 },
         { correlationId: '' },
       )
@@ -513,7 +520,7 @@ describe('AbstractSQSConsumer', () => {
         Body: JSON.stringify(validEnvelope),
       }
 
-      const result = await capturedHandleMessage!(message)
+      const result = await capturedHandleMessage?.(message)
       expect(result).toBe(message)
     })
   })

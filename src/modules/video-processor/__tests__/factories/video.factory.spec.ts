@@ -13,7 +13,7 @@ describe('VideoFactory', () => {
     expect(video.metadata.filename).toBe('test-video')
     expect(video.metadata.extension).toBe('mp4')
     expect(video.thirdPartyVideoIntegration).toBeDefined()
-    expect(video.thirdPartyVideoIntegration!.uploadId).toBe('upload-id-123')
+    expect(video.thirdPartyVideoIntegration?.uploadId).toBe('upload-id-123')
   })
 
   it('should create a video with overridden status (exercises createFromDatabase path)', () => {

@@ -1,4 +1,4 @@
-import { describe, expect, it, mock, beforeEach } from 'bun:test'
+import { describe, expect, it, mock } from 'bun:test'
 import { context } from '@opentelemetry/api'
 import { PinoLoggerService } from '@core/libs/logging/pino-logger'
 import type { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
@@ -13,6 +13,14 @@ import type {
   VideoStatusChangedEvent,
 } from '@core/abstractions/messaging'
 import type { AbstractSQSPublisher } from '@modules/messaging/sqs'
+
+// Mock S3 presigned URL generation (requires AWS credentials unavailable in CI)
+mock.module('@workers/s3-presign.service', () => ({
+  generatePresignedUrl: mock(() =>
+    Promise.resolve('https://mock-presigned-url.s3.amazonaws.com/video.mp4'),
+  ),
+}))
+
 import {
   VideoEventHandler,
   type OrchestratorWorkerDeps,

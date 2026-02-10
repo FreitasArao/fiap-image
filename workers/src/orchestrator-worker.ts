@@ -75,8 +75,7 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
       CorrelationStore.correlationId ??
       event.detail.correlationId ??
       crypto.randomUUID()
-    const traceId =
-      CorrelationStore.traceId ?? event.detail.traceId
+    const traceId = CorrelationStore.traceId ?? event.detail.traceId
 
     this.deps.logger.log('[ORCHESTRATOR] Processing video', { videoId })
 

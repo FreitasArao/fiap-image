@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect } from 'bun:test'
 import { EnvelopeFactory, defaultEnvelopeFactory } from '../envelope.factory'
 import { TracingProviderStub } from './tracing-provider.stub'
 

@@ -7,6 +7,9 @@ import { VideoPrintingEvent } from '../video-printing-event'
 import { VideoSplittingEvent } from '../video-splitting-event'
 import { VideoUploadedEvent } from '../video-uploaded-event'
 
+// Helper type to expose the protected constructor of DomainEvent subclasses
+type DomainEventConstructor<T> = new (data: Video) => T
+
 function makeVideo(): Video {
   return Video.create({
     metadata: VideoMetadataVO.create({
@@ -23,19 +26,25 @@ describe('Domain Events', () => {
   describe('VideoUploadedEvent', () => {
     it('should return "VideoUploaded" as eventName', () => {
       const video = makeVideo()
-      const event = new (VideoUploadedEvent as any)(video) as VideoUploadedEvent
+      const event = new (
+        VideoUploadedEvent as unknown as DomainEventConstructor<VideoUploadedEvent>
+      )(video)
       expect(event.eventName).toBe('VideoUploaded')
     })
 
     it('should carry the video entity as data', () => {
       const video = makeVideo()
-      const event = new (VideoUploadedEvent as any)(video) as VideoUploadedEvent
+      const event = new (
+        VideoUploadedEvent as unknown as DomainEventConstructor<VideoUploadedEvent>
+      )(video)
       expect(event.data).toBe(video)
     })
 
     it('should set eventDate and dateTimeOccurred', () => {
       const video = makeVideo()
-      const event = new (VideoUploadedEvent as any)(video) as VideoUploadedEvent
+      const event = new (
+        VideoUploadedEvent as unknown as DomainEventConstructor<VideoUploadedEvent>
+      )(video)
       expect(event.eventDate).toBeInstanceOf(Date)
       expect(event.dateTimeOccurred).toBeInstanceOf(Date)
     })
@@ -44,13 +53,17 @@ describe('Domain Events', () => {
   describe('VideoSplittingEvent', () => {
     it('should return "VideoSplitting" as eventName', () => {
       const video = makeVideo()
-      const event = new (VideoSplittingEvent as any)(video) as VideoSplittingEvent
+      const event = new (
+        VideoSplittingEvent as unknown as DomainEventConstructor<VideoSplittingEvent>
+      )(video)
       expect(event.eventName).toBe('VideoSplitting')
     })
 
     it('should carry the video entity as data', () => {
       const video = makeVideo()
-      const event = new (VideoSplittingEvent as any)(video) as VideoSplittingEvent
+      const event = new (
+        VideoSplittingEvent as unknown as DomainEventConstructor<VideoSplittingEvent>
+      )(video)
       expect(event.data).toBe(video)
     })
   })
@@ -58,13 +71,17 @@ describe('Domain Events', () => {
   describe('VideoPrintingEvent', () => {
     it('should return "VideoPrinting" as eventName', () => {
       const video = makeVideo()
-      const event = new (VideoPrintingEvent as any)(video) as VideoPrintingEvent
+      const event = new (
+        VideoPrintingEvent as unknown as DomainEventConstructor<VideoPrintingEvent>
+      )(video)
       expect(event.eventName).toBe('VideoPrinting')
     })
 
     it('should carry the video entity as data', () => {
       const video = makeVideo()
-      const event = new (VideoPrintingEvent as any)(video) as VideoPrintingEvent
+      const event = new (
+        VideoPrintingEvent as unknown as DomainEventConstructor<VideoPrintingEvent>
+      )(video)
       expect(event.data).toBe(video)
     })
   })
