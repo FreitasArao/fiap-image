@@ -106,7 +106,10 @@ export class StoragePathBuilder {
 
 export function createStoragePathBuilder(): StoragePathBuilder {
   return new StoragePathBuilder({
-    videoBucket: process.env.VIDEO_BUCKET || 'fiapx-video-parts',
+    videoBucket:
+      process.env.S3_INPUT_BUCKET ||
+      process.env.VIDEO_BUCKET ||
+      'fiapx-video-parts',
     region: process.env.AWS_REGION || 'us-east-1',
   })
 }
