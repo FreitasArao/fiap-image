@@ -81,13 +81,30 @@ export abstract class AbstractSQSConsumer<TPayload> {
     }
 
     const detailEnvelope = GenericEnvelopeSchema.safeParse(parsed.detail)
-    if (!detailEnvelope.success) {
-      throw new Error('EventBridge detail is not in envelope format')
+    if (detailEnvelope.success) {
+      return {
+        payload: { ...parsed, detail: detailEnvelope.data.payload },
+        metadata: detailEnvelope.data.metadata,
+      }
     }
 
+    // Case 3: Raw EventBridge event (e.g. S3 → EventBridge → SQS)
+    // The detail is not wrapped in an envelope; use the full event as payload
+    // and synthesize metadata from EventBridge fields.
     return {
-      payload: { ...parsed, detail: detailEnvelope.data.payload },
-      metadata: detailEnvelope.data.metadata,
+      payload: parsed,
+      metadata: {
+        messageId: parsed.id ?? crypto.randomUUID(),
+        correlationId: parsed.id ?? crypto.randomUUID(),
+        traceId: parsed.id ?? '',
+        spanId: '',
+        source: parsed.source ?? 'unknown',
+        eventType: parsed['detail-type'] ?? 'unknown',
+        version: parsed.version ?? '0',
+        timestamp: parsed.time ?? new Date().toISOString(),
+        retryCount: 0,
+        maxRetries: 3,
+      },
     }
   }
 
