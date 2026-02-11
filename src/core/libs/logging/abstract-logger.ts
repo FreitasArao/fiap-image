@@ -10,6 +10,7 @@ export type LogExtra = {
 
 export type Config = {
   suppressConsole?: boolean
+  serviceName?: string
 }
 
 export type LoggerParams = {
@@ -22,6 +23,40 @@ export type LogLevel = 'info' | 'error' | 'warn' | 'debug' | 'trace'
 
 export type BaseLogMeta = {
   context?: string
+  [key: string]: unknown
+}
+
+/**
+ * Datadog standard attributes for log-based metrics.
+ * @see https://docs.datadoghq.com/standard-attributes/
+ * @see https://docs.datadoghq.com/logs/log_configuration/attributes_naming_convention
+ */
+export type DatadogLogMeta = {
+  /** Datadog trace correlation */
+  'dd.trace_id'?: string
+  'dd.span_id'?: string
+  'dd.correlation_id'?: string
+
+  /** Duration in nanoseconds (Datadog standard) */
+  duration?: number
+
+  /** HTTP standard attributes */
+  'http.method'?: string
+  'http.status_code'?: number
+  'http.url'?: string
+  'http.url_details.path'?: string
+
+  /** Network attributes */
+  'network.client.ip'?: string
+
+  /** Service identification */
+  service?: string
+  env?: string
+  version?: string
+
+  /** Custom business attributes */
+  component?: string
+  status?: string
   [key: string]: unknown
 }
 

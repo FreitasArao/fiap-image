@@ -1,4 +1,10 @@
-export type VideoStatus = 'UPLOADED' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
+export type VideoStatus =
+  | 'UPLOADED'
+  | 'PROCESSING'
+  | 'SPLITTING'
+  | 'PRINTING'
+  | 'COMPLETED'
+  | 'FAILED'
 
 export interface VideoStatusChangedEvent {
   videoId: string

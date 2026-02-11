@@ -11,6 +11,18 @@ import { CorrelationStore } from '@core/libs/context'
 import { type Context, trace as otelTrace } from '@opentelemetry/api'
 import pino, { type Logger as PinoBaseLogger } from 'pino'
 
+/**
+ * Resolves Datadog service metadata from environment variables.
+ * These are injected via DD_SERVICE, DD_ENV, DD_VERSION in Kubernetes deployments.
+ */
+function resolveServiceMeta() {
+  return {
+    service: Bun.env.DD_SERVICE ?? 'fiap-image',
+    env: Bun.env.DD_ENV ?? Bun.env.NODE_ENV ?? 'development',
+    version: Bun.env.DD_VERSION ?? '1.0.0',
+  }
+}
+
 export class PinoLoggerService extends AbstractLoggerService<pino.Level> {
   private readonly logger: PinoBaseLogger
 
@@ -22,6 +34,8 @@ export class PinoLoggerService extends AbstractLoggerService<pino.Level> {
   ) {
     super(config, context)
 
+    const serviceMeta = resolveServiceMeta()
+
     this.logger =
       loggerInstance ??
       pino({
@@ -29,6 +43,13 @@ export class PinoLoggerService extends AbstractLoggerService<pino.Level> {
         serializers: {
           err: pino.stdSerializers.err,
           error: pino.stdSerializers.err,
+        },
+        // Datadog standard base attributes: service, env, version
+        // These appear at the root of every log line for Datadog indexing
+        base: {
+          service: config.serviceName ?? serviceMeta.service,
+          env: serviceMeta.env,
+          version: serviceMeta.version,
         },
         mixin: () => {
           // Get correlation context from AsyncLocalStorage
@@ -38,13 +59,22 @@ export class PinoLoggerService extends AbstractLoggerService<pino.Level> {
           const span = otelTrace.getSpan(otelContext)
           const otelContext_ = span?.spanContext()
 
+          // Datadog standard trace correlation attributes
+          // @see https://docs.datadoghq.com/tracing/other_telemetry/connect_logs_and_traces/
+          const traceId = correlationCtx?.traceId ?? otelContext_?.traceId
+          const spanId = correlationCtx?.spanId ?? otelContext_?.spanId
+
           return {
-            // Prefer AsyncLocalStorage context, fallback to OpenTelemetry
-            correlationId: correlationCtx?.correlationId,
-            traceId: correlationCtx?.traceId ?? otelContext_?.traceId,
-            spanId: correlationCtx?.spanId ?? otelContext_?.spanId,
+            'dd.trace_id': traceId,
+            'dd.span_id': spanId,
+            'dd.correlation_id': correlationCtx?.correlationId,
           }
         },
+        // Flatten extra fields into the root log object for Datadog faceting
+        formatters: {
+          log: (obj: Record<string, unknown>) => obj,
+        },
+        timestamp: pino.stdTimeFunctions.isoTime,
         transport: this.resolveTransport(),
       })
   }
@@ -66,7 +96,7 @@ export class PinoLoggerService extends AbstractLoggerService<pino.Level> {
 
     const base: BaseLogMeta = {
       context: this._context,
-      extra: maskedExtra,
+      ...maskedExtra,
     }
 
     this.logger[handleLevel](base, message)

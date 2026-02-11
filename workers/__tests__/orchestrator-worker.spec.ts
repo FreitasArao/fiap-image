@@ -294,7 +294,7 @@ describe('VideoEventHandler', () => {
       expect(messages[0].totalSegments).toBe(3)
     })
 
-    it('should emit PROCESSING status event', async () => {
+    it('should emit SPLITTING on arrival and PRINTING after publishing', async () => {
       const eventEmitter = createMockEventEmitter()
       const { handler } = createTestHandler({ eventEmitter })
       const event: VideoEvent = {
@@ -314,10 +314,17 @@ describe('VideoEventHandler', () => {
       )
 
       expect(result.isSuccess).toBe(true)
-      expect(eventEmitter.emittedEvents).toHaveLength(1)
+      expect(eventEmitter.emittedEvents).toHaveLength(2)
       expect(eventEmitter.emittedEvents[0]).toMatchObject({
         videoId: 'video-123',
-        status: 'PROCESSING',
+        status: 'SPLITTING',
+        correlationId: 'corr-123',
+        userEmail: 'user@example.com',
+        videoName: 'test.mp4',
+      })
+      expect(eventEmitter.emittedEvents[1]).toMatchObject({
+        videoId: 'video-123',
+        status: 'PRINTING',
         correlationId: 'corr-123',
         userEmail: 'user@example.com',
         videoName: 'test.mp4',

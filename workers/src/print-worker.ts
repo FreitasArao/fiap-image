@@ -42,6 +42,11 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
       deps.frameInterval ?? parseInt(process.env.FRAME_INTERVAL ?? '1', 10)
   }
 
+  /** Convert milliseconds to nanoseconds (Datadog standard) */
+  private msToNs(ms: number): number {
+    return Math.round(ms * 1_000_000)
+  }
+
   parse(rawPayload: unknown): Result<SegmentMessage, Error> {
     const result = SegmentMessageSchema.safeParse(rawPayload)
     if (!result.success) {
@@ -54,6 +59,7 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
     message: SegmentMessage,
     context: MessageContext,
   ): Promise<Result<void, Error>> {
+    const segmentStartTime = performance.now()
     const {
       videoId,
       presignedUrl,
@@ -73,11 +79,14 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
       context.messageId ??
       ''
 
-    // correlationId is now automatically included in logs via Pino mixin
-    this.deps.logger.log(
-      `[PRINT] Processing segment ${segmentNumber}/${totalSegments} for video: ${videoId}`,
-    )
-    this.deps.logger.log(`[PRINT] Time range: ${startTime}s - ${endTime}s`)
+    this.deps.logger.log('segment.processing.start', {
+      'video.id': videoId,
+      'segment.number': segmentNumber,
+      'segment.total': totalSegments,
+      'segment.start_time': startTime,
+      'segment.end_time': endTime,
+      component: 'print-worker',
+    })
 
     const processor = this.deps.processorFactory(
       `${videoId}-seg${segmentNumber}`,
@@ -86,7 +95,7 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
     try {
       await processor.setup()
 
-      this.deps.logger.log('[PRINT] Extracting frames from URL (streaming)...')
+      const extractStartTime = performance.now()
 
       const extractResult = await processor.extractFramesFromUrl(
         presignedUrl,
@@ -102,6 +111,7 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
           videoId,
           segmentNumber,
           correlationId,
+          segmentStartTime,
           userEmail,
           videoName,
         )
@@ -109,9 +119,15 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
 
       const { outputDir, count } = extractResult.value
 
-      this.deps.logger.log(`[PRINT] Extracted ${count} frames`)
+      this.deps.logger.log('segment.processing.frames_extracted', {
+        'video.id': videoId,
+        'segment.number': segmentNumber,
+        'frames.count': count,
+        duration: this.msToNs(performance.now() - extractStartTime),
+        component: 'print-worker',
+      })
 
-      this.deps.logger.log('[PRINT] Uploading frames to S3...')
+      const uploadStartTime = performance.now()
       const printsPrefix = this.pathBuilder
         .videoPrint(
           videoId,
@@ -133,10 +149,19 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
           videoId,
           segmentNumber,
           correlationId,
+          segmentStartTime,
           userEmail,
           videoName,
         )
       }
+
+      this.deps.logger.log('segment.processing.upload_complete', {
+        'video.id': videoId,
+        'segment.number': segmentNumber,
+        'frames.count': count,
+        duration: this.msToNs(performance.now() - uploadStartTime),
+        component: 'print-worker',
+      })
 
       const isLastSegment = this.checkAndUpdateProgress(
         videoId,
@@ -160,12 +185,23 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
           downloadUrl,
         )
 
-        this.deps.logger.log(`[PRINT] Video ${videoId} completed!`)
+        this.deps.logger.log('video.processing.complete', {
+          'video.id': videoId,
+          'video.segments.total': totalSegments,
+          duration: this.msToNs(performance.now() - segmentStartTime),
+          status: 'completed',
+          component: 'print-worker',
+        })
       }
 
-      this.deps.logger.log(
-        `[PRINT] Segment ${segmentNumber}/${totalSegments} complete`,
-      )
+      this.deps.logger.log('segment.processing.end', {
+        'video.id': videoId,
+        'segment.number': segmentNumber,
+        'segment.total': totalSegments,
+        duration: this.msToNs(performance.now() - segmentStartTime),
+        status: 'success',
+        component: 'print-worker',
+      })
 
       await processor.cleanup()
       return Result.ok(undefined)
@@ -176,6 +212,7 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
         videoId,
         segmentNumber,
         correlationId,
+        segmentStartTime,
         userEmail,
         videoName,
       )
@@ -187,14 +224,17 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
     videoId: string,
     segmentNumber: number,
     correlationId: string,
+    segmentStartTime: number,
     userEmail?: string,
     videoName?: string,
   ): Promise<Result<void, Error>> {
-    // correlationId is automatically included via Pino mixin
-    this.deps.logger.error('[PRINT] Error processing segment', {
+    this.deps.logger.error('segment.processing.end', {
+      'video.id': videoId,
+      'segment.number': segmentNumber,
       error: error.message,
-      videoId,
-      segmentNumber,
+      duration: this.msToNs(performance.now() - segmentStartTime),
+      status: 'error',
+      component: 'print-worker',
     })
 
     const isNonRetryable = this.isNonRetryableError(error)
@@ -220,10 +260,12 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
     segmentNumber: number,
     totalSegments: number,
   ): boolean {
-    // correlationId is automatically included via Pino mixin
-    this.deps.logger.log(
-      `[PRINT] Segment ${segmentNumber}/${totalSegments} processed for video: ${videoId}`,
-    )
+    this.deps.logger.log('segment.processing.progress', {
+      'video.id': videoId,
+      'segment.number': segmentNumber,
+      'segment.total': totalSegments,
+      component: 'print-worker',
+    })
     return segmentNumber === totalSegments
   }
 
@@ -259,14 +301,17 @@ export class SegmentEventHandler implements MessageHandler<SegmentMessage> {
       downloadUrl,
       errorReason,
     })
-    // correlationId is automatically included via Pino mixin
-    this.deps.logger.log(`[PRINT] Emitted event: ${status}`)
+    this.deps.logger.log('video.status.changed', {
+      'video.id': videoId,
+      'video.status': status,
+      component: 'print-worker',
+    })
   }
 }
 
 if (import.meta.main) {
   const logger = new PinoLoggerService(
-    { suppressConsole: false },
+    { suppressConsole: false, serviceName: 'fiap-image-print' },
     context.active(),
   )
 

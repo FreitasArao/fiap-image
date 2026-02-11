@@ -91,6 +91,11 @@ export abstract class AbstractSQSConsumer<TPayload> {
     }
   }
 
+  /** Convert milliseconds to nanoseconds (Datadog standard) */
+  private msToNs(ms: number): number {
+    return Math.round(ms * 1_000_000)
+  }
+
   private async processMessage(message: Message): Promise<Message | undefined> {
     const body = message.Body ?? '{}'
     const { payload, metadata } = this.parseBody(body)
@@ -110,19 +115,26 @@ export abstract class AbstractSQSConsumer<TPayload> {
         messageId: message.MessageId,
       }
 
+      const startTime = performance.now()
+
       try {
-        this.logger.log('Processing message', {
+        this.logger.log('message.processing.start', {
           messageId: message.MessageId,
           eventType: metadata.eventType,
+          queueUrl: this.config.queueUrl,
+          component: 'sqs-consumer',
         })
 
         const parseResult = this.handler.parse(payload)
 
         if (parseResult.isFailure) {
-          this.logger.warn('Payload validation failed', {
+          this.logger.warn('message.processing.end', {
             error: parseResult.error.message,
             messageId: message.MessageId,
             eventType: metadata.eventType,
+            status: 'validation_failed',
+            duration: this.msToNs(performance.now() - startTime),
+            component: 'sqs-consumer',
           })
           // Non-retryable: remove from queue
           return message
@@ -139,26 +151,35 @@ export abstract class AbstractSQSConsumer<TPayload> {
           const errorMessage = handlerError.message
 
           if (NonRetryableError.isNonRetryable(handlerError)) {
-            this.logger.warn(
-              'Non-retryable error, removing message from queue',
-              {
-                error: errorMessage,
-                messageId: message.MessageId,
-              },
-            )
+            this.logger.warn('message.processing.end', {
+              error: errorMessage,
+              messageId: message.MessageId,
+              eventType: metadata.eventType,
+              status: 'non_retryable',
+              duration: this.msToNs(performance.now() - startTime),
+              component: 'sqs-consumer',
+            })
             return message
           }
 
-          this.logger.error('Error processing message', {
+          this.logger.error('message.processing.end', {
             error: errorMessage,
             messageId: message.MessageId,
+            eventType: metadata.eventType,
+            status: 'error',
+            duration: this.msToNs(performance.now() - startTime),
+            component: 'sqs-consumer',
           })
 
           throw handlerError
         }
 
-        this.logger.log('Message processed', {
+        this.logger.log('message.processing.end', {
           messageId: message.MessageId,
+          eventType: metadata.eventType,
+          status: 'success',
+          duration: this.msToNs(performance.now() - startTime),
+          component: 'sqs-consumer',
         })
 
         return message
@@ -166,9 +187,13 @@ export abstract class AbstractSQSConsumer<TPayload> {
         const errorMessage =
           error instanceof Error ? error.message : String(error)
 
-        this.logger.error('Unexpected error processing message', {
+        this.logger.error('message.processing.end', {
           error: errorMessage,
           messageId: message.MessageId,
+          eventType: metadata.eventType,
+          status: 'error',
+          duration: this.msToNs(performance.now() - startTime),
+          component: 'sqs-consumer',
         })
 
         throw error

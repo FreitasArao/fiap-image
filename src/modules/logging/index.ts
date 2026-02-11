@@ -5,6 +5,7 @@ import { context } from '@opentelemetry/api'
 export const logger: AbstractLoggerService = new PinoLoggerService(
   {
     suppressConsole: false,
+    serviceName: 'fiap-image-api',
   },
   context.active(),
 )

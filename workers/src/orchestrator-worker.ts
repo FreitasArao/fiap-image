@@ -31,7 +31,6 @@ import { NonRetryableError } from '@core/errors/non-retryable.error'
 import { EventBridgeEmitter } from './adapters'
 import type { EventBusEmitter } from '@core/abstractions/messaging'
 
-/** Default segment duration: 10 seconds */
 const DEFAULT_SEGMENT_DURATION_MS = 10_000
 
 export type OrchestratorWorkerDeps = {
@@ -41,18 +40,15 @@ export type OrchestratorWorkerDeps = {
   pathBuilder?: StoragePathBuilder
 }
 
-/**
- * VideoEventHandler - Processes video events and fans out segment messages.
- *
- * All correlation context (correlationId, traceId, spanId) is automatically
- * propagated via CorrelationStore (AsyncLocalStorage), set by the SQS consumer.
- * Logs automatically include these fields via the Pino mixin.
- */
 export class VideoEventHandler implements MessageHandler<VideoEvent> {
   private readonly pathBuilder: StoragePathBuilder
 
   constructor(private readonly deps: OrchestratorWorkerDeps) {
     this.pathBuilder = deps.pathBuilder ?? createStoragePathBuilder()
+  }
+
+  private msToNs(ms: number): number {
+    return Math.round(ms * 1_000_000)
   }
 
   parse(rawPayload: unknown): Result<VideoEvent, Error> {
@@ -67,6 +63,7 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
     event: VideoEvent,
     _context: MessageContext,
   ): Promise<Result<void, Error>> {
+    const handleStartTime = performance.now()
     const { videoId, videoPath, duration, userEmail, videoName } = event.detail
 
     // correlationId is automatically injected by Pino mixin via CorrelationStore
@@ -77,7 +74,12 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
       crypto.randomUUID()
     const traceId = CorrelationStore.traceId ?? event.detail.traceId
 
-    this.deps.logger.log('[ORCHESTRATOR] Processing video', { videoId })
+    this.deps.logger.log('video.processing.start', {
+      'video.id': videoId,
+      'video.duration_ms': duration,
+      'video.path': videoPath,
+      component: 'orchestrator',
+    })
 
     if (!videoPath) {
       return Result.fail(
@@ -104,9 +106,15 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
 
     const s3Key = inputStoragePath.key
 
-    this.deps.logger.log(
-      `[ORCHESTRATOR] Duration: ${duration}ms (${duration / 1000}s)`,
-    )
+    // Emit SPLITTING status as soon as validation passes and processing begins
+    await this.deps.eventEmitter.emitVideoStatusChanged({
+      videoId,
+      status: 'SPLITTING',
+      correlationId,
+      userEmail,
+      videoName,
+      traceId,
+    })
 
     const ranges = calculateTimeRanges(duration, DEFAULT_SEGMENT_DURATION_MS)
     const totalSegments = getTotalSegments(
@@ -114,11 +122,14 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
       DEFAULT_SEGMENT_DURATION_MS,
     )
 
-    this.deps.logger.log(`[ORCHESTRATOR] Calculated ${totalSegments} segments`)
+    this.deps.logger.log('video.processing.segments_calculated', {
+      'video.id': videoId,
+      'video.segments.total': totalSegments,
+      'video.duration_ms': duration,
+      component: 'orchestrator',
+    })
 
     const presignedUrl = await generatePresignedUrl(inputBucket, s3Key, 7200)
-
-    this.deps.logger.log('[ORCHESTRATOR] Generated presigned URL')
 
     const messages: SegmentMessage[] = ranges.map((range) => ({
       videoId,
@@ -152,19 +163,24 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
       )
     }
 
-    // Emit status change event via EventBridge (also uses Envelope pattern internally)
+    // Emit PRINTING status — segments are now in the print queue
     await this.deps.eventEmitter.emitVideoStatusChanged({
       videoId,
-      status: 'PROCESSING',
+      status: 'PRINTING',
       correlationId,
       userEmail,
       videoName,
       traceId,
     })
 
-    this.deps.logger.log(
-      `[ORCHESTRATOR] Published ${messages.length} segment messages`,
-    )
+    this.deps.logger.log('video.processing.segments_published', {
+      'video.id': videoId,
+      'video.segments.total': totalSegments,
+      'video.segments.published': messages.length,
+      duration: this.msToNs(performance.now() - handleStartTime),
+      status: 'success',
+      component: 'orchestrator',
+    })
 
     return Result.ok(undefined)
   }
@@ -172,7 +188,7 @@ export class VideoEventHandler implements MessageHandler<VideoEvent> {
 
 if (import.meta.main) {
   const logger = new PinoLoggerService(
-    { suppressConsole: false },
+    { suppressConsole: false, serviceName: 'fiap-image-orchestrator' },
     context.active(),
   )
 

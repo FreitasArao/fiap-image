@@ -34,7 +34,7 @@ describe('PinoLoggerService - Unit', () => {
     expect(mockPino.info).toHaveBeenCalledWith(
       expect.objectContaining({
         context: 'TestContext',
-        extra: { userId: 1 },
+        userId: 1,
       }),
       'Test',
     )

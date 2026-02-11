@@ -63,7 +63,8 @@ describe('PinoLoggerService', () => {
       logger.debug('debug with extra', { someKey: 'someVal' })
 
       const callArgs = (mockPino.debug as MockFn).mock.calls[0]
-      expect(callArgs[0].extra).toBeDefined()
+      // Extra fields are now spread directly at root level (Datadog standard)
+      expect(callArgs[0].someKey).toBe('someVal')
       expect(callArgs[1]).toBe('debug with extra')
     })
   })
