@@ -19,8 +19,8 @@ COPY workers/src/ ./workers/src/
 COPY tsconfig.json ./
 
 ENV AWS_REGION=us-east-1
-ENV AWS_ENDPOINT_URL=http://localstack:4566
-ENV S3_INPUT_BUCKET=fiapx-video-parts
-ENV S3_OUTPUT_BUCKET=fiapx-video-frames
+# AWS_ENDPOINT_URL, S3_INPUT_BUCKET, S3_OUTPUT_BUCKET are injected by
+# Kubernetes env vars (Terraform kubectl_manifest). No defaults here so the
+# AWS SDK uses the real endpoints when running in EKS.
 
 CMD ["bun", "run", "workers/src/orchestrator-worker.ts"]
