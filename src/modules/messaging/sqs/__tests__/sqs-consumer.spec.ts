@@ -361,21 +361,87 @@ describe('AbstractSQSConsumer', () => {
       )
     })
 
-    it('should throw when EventBridge detail is not in envelope format', async () => {
+    it('should process raw EventBridge event (detail without envelope) as Case 3', async () => {
+      // Use a pass-through handler to verify the consumer delivers the
+      // full EventBridge event as payload (FIRST: Independent & Self-validating)
+      const passThroughHandler: MessageHandler<TestPayload> = {
+        parse: (raw) => Result.ok(raw as TestPayload),
+        handle: async () => Result.ok(undefined),
+      }
+
       createSQSConsumer<TestPayload>(
         { queueUrl: 'http://test.url' },
         logger,
-        handler,
+        passThroughHandler,
       )
 
-      const message: Message = {
-        MessageId: 'sqs-bad-eb',
-        Body: JSON.stringify({ detail: { invalid: 'not-envelope' } }),
+      const rawEventBridgeEvent = {
+        version: '0',
+        id: 'eb-raw-id-123',
+        'detail-type': 'Object Created',
+        source: 'aws.s3',
+        account: '123456789',
+        time: '2026-02-11T03:21:36Z',
+        region: 'us-east-1',
+        resources: ['arn:aws:s3:::my-bucket'],
+        detail: {
+          bucket: { name: 'my-bucket' },
+          object: { key: 'video/abc/file/video.mp4', size: 12345 },
+          reason: 'CompleteMultipartUpload',
+        },
       }
 
-      await expect(capturedHandleMessage?.(message)).rejects.toThrow(
-        'EventBridge detail is not in envelope format',
+      const message: Message = {
+        MessageId: 'sqs-raw-eb',
+        Body: JSON.stringify(rawEventBridgeEvent),
+      }
+
+      const result = await capturedHandleMessage?.(message)
+
+      // Should resolve (not throw) — raw EB events are accepted via Case 3
+      expect(result).toBe(message)
+    })
+
+    it('should synthesize metadata from EventBridge fields in Case 3', async () => {
+      // Capture the context that the consumer passes to the handler
+      let capturedContext: MessageContext | null = null
+      const capturingHandler: MessageHandler<TestPayload> = {
+        parse: (raw) => Result.ok(raw as TestPayload),
+        handle: async (_payload, ctx) => {
+          capturedContext = ctx
+          return Result.ok(undefined)
+        },
+      }
+
+      createSQSConsumer<TestPayload>(
+        { queueUrl: 'http://test.url' },
+        logger,
+        capturingHandler,
       )
+
+      const rawEvent = {
+        version: '0',
+        id: 'eb-synth-id',
+        'detail-type': 'Object Created',
+        source: 'aws.s3',
+        time: '2026-02-11T10:00:00Z',
+        detail: { bucket: { name: 'b' }, object: { key: 'k' } },
+      }
+
+      const message: Message = {
+        MessageId: 'sqs-synth-meta',
+        Body: JSON.stringify(rawEvent),
+      }
+
+      const result = await capturedHandleMessage?.(message)
+      expect(result).toBe(message)
+
+      // Verify metadata was synthesized from EventBridge fields
+      expect(capturedContext).not.toBeNull()
+      expect(capturedContext!.metadata.source).toBe('aws.s3')
+      expect(capturedContext!.metadata.eventType).toBe('Object Created')
+      expect(capturedContext!.metadata.messageId).toBe('eb-synth-id')
+      expect(capturedContext!.metadata.timestamp).toBe('2026-02-11T10:00:00Z')
     })
 
     it('should return message (remove from queue) when parse fails', async () => {
