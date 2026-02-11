@@ -52,24 +52,27 @@ export abstract class BaseS3Service {
   private readonly publicEndpoint: string | undefined
 
   constructor(protected readonly logger: AbstractLoggerService) {
-    if (!Bun.env.AWS_ACCESS_KEY_ID || !Bun.env.AWS_SECRET_ACCESS_KEY) {
-      throw new Error(
-        'AWS_ENDPOINT, AWS_REGION, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set',
-      )
-    }
+    this.internalEndpoint =
+      Bun.env.AWS_ENDPOINT_URL ?? Bun.env.AWS_ENDPOINT ?? undefined
 
-    this.internalEndpoint = Bun.env.AWS_ENDPOINT
+    this.publicEndpoint = Bun.env.AWS_PUBLIC_ENDPOINT || this.internalEndpoint
 
-    this.publicEndpoint = Bun.env.AWS_PUBLIC_ENDPOINT || Bun.env.AWS_ENDPOINT
+    // When explicit credentials are provided (e.g. LocalStack), use them.
+    // Otherwise let the AWS SDK resolve credentials automatically
+    // (IRSA / node instance profile on EKS).
+    const credentials =
+      Bun.env.AWS_ACCESS_KEY_ID && Bun.env.AWS_SECRET_ACCESS_KEY
+        ? {
+            accessKeyId: Bun.env.AWS_ACCESS_KEY_ID,
+            secretAccessKey: Bun.env.AWS_SECRET_ACCESS_KEY,
+          }
+        : undefined
 
     this.s3 = new S3Client({
-      region: Bun.env?.AWS_REGION,
-      endpoint: this.internalEndpoint,
+      region: Bun.env.AWS_REGION ?? 'us-east-1',
+      ...(this.internalEndpoint && { endpoint: this.internalEndpoint }),
       forcePathStyle: true,
-      credentials: {
-        accessKeyId: Bun.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: Bun.env.AWS_SECRET_ACCESS_KEY,
-      },
+      ...(credentials && { credentials }),
       requestChecksumCalculation: 'WHEN_REQUIRED',
       responseChecksumValidation: 'WHEN_REQUIRED',
     })
