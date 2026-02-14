@@ -32,7 +32,7 @@ System_Boundary(block_upload, "BLOCO B - Upload") {
   Container(apiComplete_B, "POST /complete", "Elysia", "Finaliza upload")
 
   ContainerDb(s3Upload_B, "S3 Videos (Upload)", "S3", "Multipart Upload")
-  ContainerDb(cassandraUpload_B, "ScyllaDB", "CQL", "Status video")
+  ContainerDb(cassandraUpload_B, "Casssandra", "CQL", "Status video")
 }
 
 Rel(userUpload, apiVideos_B, "1. Cria video")
@@ -58,7 +58,7 @@ System_Boundary(block_events, "BLOCO C - S3 -> EventBridge -> SQS") {
   ContainerQueue(sqsOrch_C, "SQS Orchestrator", "SQS", "Fila orquestracao")
   ContainerQueue(sqsPrint_C, "SQS Print", "SQS", "Fila print (N msgs)")
 
-  ContainerDb(cassandraEvent_C, "ScyllaDB", "CQL", "UPLOADED")
+  ContainerDb(cassandraEvent_C, "Casssandra", "CQL", "UPLOADED")
 }
 
 Rel(s3Upload_B, eventbridge_C, "6. Object Created")
@@ -83,7 +83,7 @@ System_Boundary(block_print, "BLOCO E - Print (Paralelo)") {
   Container(kedaPrint_EN, "Print Worker N", "KEDA", "Seg ...")
 
   ContainerDb(s3Frames_E, "S3 Frames", "S3", "Frames extraidos")
-  ContainerDb(cassandraDone_E, "ScyllaDB", "CQL", "Progresso")
+  ContainerDb(cassandraDone_E, "Casssandra", "CQL", "Progresso")
 }
 
 Rel(sqsPrint_C, kedaPrint_E1, "10. Poll")

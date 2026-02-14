@@ -46,6 +46,8 @@ export function toInternalUrl(presignedUrl: string): string {
   }
 }
 
+const S3_RESOURCE = 'BaseS3Service'
+
 export abstract class BaseS3Service {
   protected readonly s3: S3Client
   private readonly internalEndpoint: string | undefined
@@ -99,8 +101,11 @@ export abstract class BaseS3Service {
     key: string,
   ): Promise<Result<{ uploadId: string; key: string }, Error>> {
     this.logger.log('Starting multipart upload to S3', {
-      key,
-      bucket: this.bucketName,
+      event: 's3.multipart.received',
+      resource: S3_RESOURCE,
+      message: 'Starting multipart upload to S3',
+      's3.bucket': this.bucketName,
+      's3.key': key,
     })
     try {
       const result = await this.s3.send(
@@ -113,9 +118,13 @@ export abstract class BaseS3Service {
       const uploadId = result.UploadId
       if (!uploadId) {
         this.logger.error('Failed to start multipart upload to S3', {
-          key: key,
-          bucket: this.bucketName,
-          error: 'UploadId is required',
+          event: 's3.multipart.completed',
+          resource: S3_RESOURCE,
+          message: 'UploadId is required',
+          status: 'failure',
+          error: { message: 'UploadId is required', kind: 'ValidationError' },
+          's3.bucket': this.bucketName,
+          's3.key': key,
         })
         return Result.fail(new Error('UploadId is required'))
       }
@@ -126,9 +135,17 @@ export abstract class BaseS3Service {
     } catch (error) {
       if (error instanceof Error) {
         this.logger.error('Failed to start multipart upload to S3', {
-          key: key,
-          bucket: this.bucketName,
-          error: error.message,
+          event: 's3.multipart.completed',
+          resource: S3_RESOURCE,
+          message: 'Failed to start multipart upload',
+          status: 'failure',
+          error: {
+            message: error.message,
+            kind: error.constructor.name,
+            stack: error.stack,
+          },
+          's3.bucket': this.bucketName,
+          's3.key': key,
         })
         return Result.fail(new Error(error.message))
       }
@@ -141,8 +158,11 @@ export abstract class BaseS3Service {
     params: CreatePartUploadURLParams,
   ): Promise<Result<{ url: string }, Error>> {
     this.logger.log('Creating multipart upload URLs to S3', {
-      key: params.key,
-      bucket: this.bucketName,
+      event: 's3.multipart.received',
+      resource: S3_RESOURCE,
+      message: 'Creating multipart upload URLs to S3',
+      's3.bucket': this.bucketName,
+      's3.key': params.key,
     })
     try {
       const command = new UploadPartCommand({
@@ -169,16 +189,28 @@ export abstract class BaseS3Service {
     } catch (error) {
       if (error instanceof Error) {
         this.logger.error('Failed to create multipart upload URLs to S3', {
-          key: params.key,
-          bucket: this.bucketName,
-          error: error.message,
+          event: 's3.multipart.completed',
+          resource: S3_RESOURCE,
+          message: 'Failed to create multipart upload URLs',
+          status: 'failure',
+          error: {
+            message: error.message,
+            kind: error.constructor.name,
+            stack: error.stack,
+          },
+          's3.bucket': this.bucketName,
+          's3.key': params.key,
         })
         return Result.fail(new Error(error.message))
       }
       this.logger.error('Failed to create multipart upload URLs to S3', {
-        key: params.key,
-        bucket: this.bucketName,
-        error: error,
+        event: 's3.multipart.completed',
+        resource: S3_RESOURCE,
+        message: 'Failed to create multipart upload URLs',
+        status: 'failure',
+        error: { message: String(error), kind: 'Error' },
+        's3.bucket': this.bucketName,
+        's3.key': params.key,
       })
       return Result.fail(new Error('Failed to create multipart upload URLs'))
     }
@@ -188,10 +220,11 @@ export abstract class BaseS3Service {
     params: CompleteMultipartUploadParams,
   ): Promise<Result<{ location: string; etag: string }, Error>> {
     this.logger.log('Completing multipart upload to S3', {
-      key: params.key,
-      bucket: this.bucketName,
-      uploadId: params.uploadId,
-      partsCount: params.parts.length,
+      event: 's3.multipart.received',
+      resource: S3_RESOURCE,
+      message: 'Completing multipart upload to S3',
+      's3.bucket': this.bucketName,
+      's3.key': params.key,
     })
     try {
       const result = await this.s3.send(
@@ -209,10 +242,12 @@ export abstract class BaseS3Service {
       )
 
       this.logger.log('Multipart upload completed successfully', {
-        key: params.key,
-        bucket: this.bucketName,
-        location: result.Location,
-        etag: result.ETag,
+        event: 's3.multipart.completed',
+        resource: S3_RESOURCE,
+        message: 'Multipart upload completed successfully',
+        status: 'success',
+        's3.bucket': this.bucketName,
+        's3.key': params.key,
       })
 
       return Result.ok({
@@ -222,9 +257,17 @@ export abstract class BaseS3Service {
     } catch (error) {
       if (error instanceof Error) {
         this.logger.error('Failed to complete multipart upload to S3', {
-          key: params.key,
-          bucket: this.bucketName,
-          error: error.message,
+          event: 's3.multipart.completed',
+          resource: S3_RESOURCE,
+          message: 'Failed to complete multipart upload',
+          status: 'failure',
+          error: {
+            message: error.message,
+            kind: error.constructor.name,
+            stack: error.stack,
+          },
+          's3.bucket': this.bucketName,
+          's3.key': params.key,
         })
         return Result.fail(new Error(error.message))
       }

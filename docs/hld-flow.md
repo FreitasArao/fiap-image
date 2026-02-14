@@ -15,7 +15,7 @@ graph TB
         U2[👤 Usuário]
         API2[POST /videos<br/>Elysia API]
         S3_2[S3 Videos<br/>Bucket]
-        DB2[(ScyllaDB)]
+        DB2[(Cassandra)]
 
         U2 -->|"2. Cria vídeo"| API2
         API2 -->|"CreateMultipartUpload"| S3_2
@@ -26,7 +26,7 @@ graph TB
         U3[👤 Usuário]
         API3[GET /upload-urls<br/>Elysia API]
         S3_3[S3 Videos<br/>Bucket]
-        DB3[(ScyllaDB)]
+        DB3[(Cassandra)]
 
         U3 -->|"3. Solicita URLs (lote 20)"| API3
         API3 -->|"getSignedUrl()"| S3_3
@@ -37,7 +37,7 @@ graph TB
         U4[👤 Usuário]
         S3_4[S3 Videos<br/>Bucket]
         API4[POST /parts/:n<br/>Elysia API]
-        DB4[(ScyllaDB)]
+        DB4[(Cassandra)]
 
         U4 -->|"4. Upload direto (partes)"| S3_4
         U4 -->|"5. Reporta ETag"| API4
@@ -59,7 +59,7 @@ graph TB
         SNS6[SNS multipart<br/>topic]
         SQS6[SQS Multipart<br/>Queue]
         API6[API Consumer<br/>Elysia]
-        DB6[(ScyllaDB)]
+        DB6[(Cassandra)]
 
         S3_6 -->|"7. Event: Object Created"| EB6
         EB6 -->|"Publica"| SNS6
@@ -96,7 +96,7 @@ graph TB
         JOB9[Bun Job<br/>FFmpeg Extract]
         S3V9[S3 Videos<br/>Read Range]
         S3F9[S3 Frames<br/>Write]
-        DB9[(ScyllaDB)]
+        DB9[(Cassandra)]
 
         SQSP9 -->|"11. Poll paralelo"| KEDA9
         KEDA9 -->|"Processa range"| JOB9

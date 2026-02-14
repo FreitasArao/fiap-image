@@ -1,9 +1,7 @@
 import { Elysia } from 'elysia'
 import { logger } from './index'
+import { msToNs } from '@core/libs/logging/log-event'
 import type { DatadogLogMeta } from '@core/libs/logging/abstract-logger'
-
-/** Convert milliseconds to nanoseconds (Datadog standard) */
-const msToNs = (ms: number): number => Math.round(ms * 1_000_000)
 
 const requestStartTime = new WeakMap<Request, number>()
 
@@ -23,8 +21,13 @@ export const loggerPlugin = new Elysia({ name: 'logger' })
 
     const durationMs = performance.now() - startTime
     const statusCode = typeof set.status === 'number' ? set.status : 200
+    const status = statusCode >= 400 ? 'failure' : 'success'
+    const message = `${request.method} ${path} ${statusCode} ${Math.round(durationMs)}ms`
 
     const meta: DatadogLogMeta = {
+      event: 'http.request.completed',
+      resource: 'HttpServer',
+      message,
       'http.method': request.method,
       'http.url': path,
       'http.status_code': statusCode,
@@ -34,10 +37,10 @@ export const loggerPlugin = new Elysia({ name: 'logger' })
         request.headers.get('x-real-ip') ??
         undefined,
       duration: msToNs(durationMs),
-      status: statusCode >= 400 ? 'error' : 'ok',
+      status,
     }
 
-    logger.log('http.request', meta)
+    logger.log(message, meta)
   })
   .onError({ as: 'global' }, ({ request, path, set, error }) => {
     const startTime = requestStartTime.get(request)
@@ -45,6 +48,9 @@ export const loggerPlugin = new Elysia({ name: 'logger' })
     const statusCode = typeof set.status === 'number' ? set.status : 500
 
     const meta: DatadogLogMeta = {
+      event: 'http.request.error',
+      resource: 'HttpServer',
+      message: `HTTP request failed: ${request.method} ${path} ${statusCode}`,
       'http.method': request.method,
       'http.url': path,
       'http.status_code': statusCode,
@@ -54,9 +60,13 @@ export const loggerPlugin = new Elysia({ name: 'logger' })
         request.headers.get('x-real-ip') ??
         undefined,
       duration: msToNs(durationMs),
-      status: 'error',
-      error: error instanceof Error ? error.message : String(error),
+      status: 'failure',
+      error: {
+        message: error instanceof Error ? error.message : String(error),
+        kind: error instanceof Error ? error.constructor.name : 'Error',
+        stack: error instanceof Error ? error.stack : undefined,
+      },
     }
 
-    logger.error('http.request.error', meta)
+    logger.error(meta.message, meta)
   })

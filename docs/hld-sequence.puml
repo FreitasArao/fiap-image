@@ -48,7 +48,7 @@ box "Notifications" #LightCyan
     participant "SES\nTemplates" as ses
 end box
 
-database "ScyllaDB" as db #Gold
+database "Cassandra" as db #Gold
 
 == 0. Autenticacao ==
 

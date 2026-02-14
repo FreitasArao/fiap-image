@@ -31,20 +31,11 @@ export class CompleteMultipartMessageHandler
     event: CompleteMultipartEvent,
     _context: MessageContext,
   ): Promise<Result<void, Error>> {
-    // correlationId is automatically propagated via CorrelationStore (set by AbstractSQSConsumer)
-    // and automatically included in all logs via Pino mixin - no manual passing needed
-    this.logger.log('Handling S3 CompleteMultipartUpload event', { event })
-
     const result = await this.completeMultipartHandler.handle(event)
 
     if (result.isFailure) {
-      this.logger.log('CompleteMultipartHandler returned failure', {
-        error: result.error?.message,
-      })
       return Result.fail(result.error)
     }
-
-    this.logger.log('S3 CompleteMultipartUpload event handled successfully')
 
     return Result.ok()
   }

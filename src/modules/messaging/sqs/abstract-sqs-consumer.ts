@@ -113,6 +113,21 @@ export abstract class AbstractSQSConsumer<TPayload> {
     return Math.round(ms * 1_000_000)
   }
 
+  private toErrorPayload(error: unknown): {
+    message: string
+    kind: string
+    stack?: string
+  } {
+    if (error instanceof Error) {
+      return {
+        message: error.message,
+        kind: error.constructor.name,
+        stack: error.stack,
+      }
+    }
+    return { message: String(error), kind: 'Error' }
+  }
+
   private async processMessage(message: Message): Promise<Message | undefined> {
     const body = message.Body ?? '{}'
     const { payload, metadata } = this.parseBody(body)
@@ -133,25 +148,32 @@ export abstract class AbstractSQSConsumer<TPayload> {
       }
 
       const startTime = performance.now()
+      const baseMeta = {
+        event: 'sqs.message.received',
+        resource: 'AbstractSQSConsumer',
+        'sqs.queueUrl': this.config.queueUrl,
+        'sqs.messageId': message.MessageId ?? '',
+        'sqs.eventType': metadata.eventType,
+      }
 
       try {
-        this.logger.log('message.processing.start', {
-          messageId: message.MessageId,
-          eventType: metadata.eventType,
-          queueUrl: this.config.queueUrl,
-          component: 'sqs-consumer',
+        this.logger.log('SQS message received', {
+          ...baseMeta,
+          event: 'sqs.message.received',
         })
 
         const parseResult = this.handler.parse(payload)
 
         if (parseResult.isFailure) {
-          this.logger.warn('message.processing.end', {
-            error: parseResult.error.message,
-            messageId: message.MessageId,
-            eventType: metadata.eventType,
-            status: 'validation_failed',
+          this.logger.warn('SQS message failed (validation)', {
+            event: 'sqs.message.failed',
+            resource: 'AbstractSQSConsumer',
+            status: 'failure',
             duration: this.msToNs(performance.now() - startTime),
-            component: 'sqs-consumer',
+            error: this.toErrorPayload(parseResult.error),
+            'sqs.queueUrl': this.config.queueUrl,
+            'sqs.messageId': message.MessageId ?? '',
+            'sqs.eventType': metadata.eventType,
           })
           // Non-retryable: remove from queue
           return message
@@ -163,54 +185,59 @@ export abstract class AbstractSQSConsumer<TPayload> {
         )
 
         if (handleResult.isFailure) {
-          // Use type guard to properly extract error
           const handlerError: Error = handleResult.error
-          const errorMessage = handlerError.message
 
           if (NonRetryableError.isNonRetryable(handlerError)) {
-            this.logger.warn('message.processing.end', {
-              error: errorMessage,
-              messageId: message.MessageId,
-              eventType: metadata.eventType,
-              status: 'non_retryable',
+            this.logger.warn('SQS message failed (non-retryable)', {
+              event: 'sqs.message.failed',
+              resource: 'AbstractSQSConsumer',
+              status: 'failure',
               duration: this.msToNs(performance.now() - startTime),
-              component: 'sqs-consumer',
+              error: this.toErrorPayload(handlerError),
+              'sqs.queueUrl': this.config.queueUrl,
+              'sqs.messageId': message.MessageId ?? '',
+              'sqs.eventType': metadata.eventType,
             })
             return message
           }
 
-          this.logger.error('message.processing.end', {
-            error: errorMessage,
-            messageId: message.MessageId,
-            eventType: metadata.eventType,
-            status: 'error',
+          this.logger.error('SQS message failed', {
+            event: 'sqs.message.failed',
+            resource: 'AbstractSQSConsumer',
+            status: 'failure',
             duration: this.msToNs(performance.now() - startTime),
-            component: 'sqs-consumer',
+            error: this.toErrorPayload(handlerError),
+            'sqs.queueUrl': this.config.queueUrl,
+            'sqs.messageId': message.MessageId ?? '',
+            'sqs.eventType': metadata.eventType,
           })
 
           throw handlerError
         }
 
-        this.logger.log('message.processing.end', {
-          messageId: message.MessageId,
-          eventType: metadata.eventType,
+        this.logger.log('SQS message processed', {
+          event: 'sqs.message.processed',
+          resource: 'AbstractSQSConsumer',
+          message: 'SQS message processed successfully',
           status: 'success',
           duration: this.msToNs(performance.now() - startTime),
-          component: 'sqs-consumer',
+          'sqs.queueUrl': this.config.queueUrl,
+          'sqs.messageId': message.MessageId ?? '',
+          'sqs.eventType': metadata.eventType,
         })
 
         return message
       } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error)
-
-        this.logger.error('message.processing.end', {
-          error: errorMessage,
-          messageId: message.MessageId,
-          eventType: metadata.eventType,
-          status: 'error',
+        this.logger.error('SQS message failed', {
+          event: 'sqs.message.failed',
+          resource: 'AbstractSQSConsumer',
+          message: 'SQS message processing error',
+          status: 'failure',
           duration: this.msToNs(performance.now() - startTime),
-          component: 'sqs-consumer',
+          error: this.toErrorPayload(error),
+          'sqs.queueUrl': this.config.queueUrl,
+          'sqs.messageId': message.MessageId ?? '',
+          'sqs.eventType': metadata.eventType,
         })
 
         throw error
@@ -220,23 +247,75 @@ export abstract class AbstractSQSConsumer<TPayload> {
 
   private setupEventListeners(): void {
     this.consumer.on('error', (err) => {
-      this.logger.error('Consumer error:', err)
+      this.logger.error('SQS consumer error', {
+        event: 'sqs.consumer.error',
+        resource: 'AbstractSQSConsumer',
+        message: 'SQS consumer error',
+        status: 'failure',
+        error:
+          err instanceof Error
+            ? {
+                message: err.message,
+                kind: err.constructor.name,
+                stack: err.stack,
+              }
+            : { message: String(err), kind: 'Error' },
+        'sqs.queueUrl': this.config.queueUrl,
+      })
     })
 
     this.consumer.on('processing_error', (err) => {
-      this.logger.error('Processing error:', err)
+      this.logger.error('SQS processing error', {
+        event: 'sqs.consumer.error',
+        resource: 'AbstractSQSConsumer',
+        message: 'SQS processing error',
+        status: 'failure',
+        error:
+          err instanceof Error
+            ? {
+                message: err.message,
+                kind: err.constructor.name,
+                stack: err.stack,
+              }
+            : { message: String(err), kind: 'Error' },
+        'sqs.queueUrl': this.config.queueUrl,
+      })
     })
 
     this.consumer.on('timeout_error', (err) => {
-      this.logger.error('Timeout error:', err)
+      this.logger.error('SQS timeout error', {
+        event: 'sqs.consumer.error',
+        resource: 'AbstractSQSConsumer',
+        message: 'SQS timeout error',
+        status: 'failure',
+        error:
+          err instanceof Error
+            ? {
+                message: err.message,
+                kind: err.constructor.name,
+                stack: err.stack,
+              }
+            : { message: String(err), kind: 'Error' },
+        'sqs.queueUrl': this.config.queueUrl,
+      })
     })
 
     this.consumer.on('started', () => {
-      this.logger.log(`Consumer started for ${this.config.queueUrl}`)
+      this.logger.log('SQS consumer started', {
+        event: 'sqs.consumer.started',
+        resource: 'AbstractSQSConsumer',
+        message: `Consumer started for ${this.config.queueUrl}`,
+        'sqs.queueUrl': this.config.queueUrl,
+      })
     })
 
     this.consumer.on('stopped', () => {
-      this.logger.log(`Consumer stopped for ${this.config.queueUrl}`)
+      this.logger.log('SQS consumer stopped', {
+        event: 'sqs.consumer.stopped',
+        resource: 'AbstractSQSConsumer',
+        message: `Consumer stopped for ${this.config.queueUrl}`,
+        'sqs.queueUrl': this.config.queueUrl,
+      })
     })
   }
 

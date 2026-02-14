@@ -25,32 +25,52 @@ export class SqsUploadReconciler {
     private readonly reconcileService: ReconcileUploadService,
   ) {}
 
+  private static readonly resource = 'SqsUploadReconcilerService'
+
   async execute(
     params: SqsReconcileParams,
   ): Promise<Result<SqsReconcileResult, Error>> {
     const { videoId, objectKey, correlationId, traceId } = params
 
-    this.logger.log(`[SqsReconciler] Starting SQS reconciliation`, {
-      videoId,
-      objectKey,
+    this.logger.log('SQS reconciliation started', {
+      event: 'video.reconcile.started',
+      resource: SqsUploadReconciler.resource,
+      message: 'Starting SQS reconciliation',
+      'video.id': videoId,
+      's3.objectKey': objectKey,
     })
 
     const videoResult = await this.videoRepository.findByObjectKey(objectKey)
 
     if (videoResult.isFailure) {
-      this.logger.error(`[SqsReconciler] Failed to find video`, {
-        videoId,
-        objectKey,
-        error: videoResult.error,
+      this.logger.error('SQS reconciliation failed (find video)', {
+        event: 'video.reconcile.completed',
+        resource: SqsUploadReconciler.resource,
+        message: 'Failed to find video',
+        status: 'failure',
+        error:
+          videoResult.error instanceof Error
+            ? {
+                message: videoResult.error.message,
+                kind: videoResult.error.constructor.name,
+                stack: videoResult.error.stack,
+              }
+            : { message: String(videoResult.error), kind: 'Error' },
+        'video.id': videoId,
+        's3.objectKey': objectKey,
       })
       return Result.fail(videoResult.error)
     }
 
     const video = videoResult.value
     if (!video) {
-      this.logger.warn(`[SqsReconciler] Video not found`, {
-        videoId,
-        objectKey,
+      this.logger.warn('SQS reconciliation skipped (video not found)', {
+        event: 'video.reconcile.completed',
+        resource: SqsUploadReconciler.resource,
+        message: 'Video not found',
+        status: 'skipped',
+        'video.id': videoId,
+        's3.objectKey': objectKey,
       })
       return Result.ok({
         skipped: true,

@@ -29,7 +29,7 @@ System_Boundary(block_upload, "BLOCO B - Upload / API") {
   Container(apiComplete_B, "POST /complete", "Elysia", "Finaliza upload")
   ContainerDb(s3Videos_B, "S3 Videos", "S3", "Videos originais")
   ContainerDb(s3Frames_B, "S3 Frames", "S3", "Frames extraidos")
-  ContainerDb(cassandra_B, "ScyllaDB", "CQL", "Status video")
+  ContainerDb(cassandra_B, "Cassandra", "CQL", "Status video")
 }
 
 Rel(user, apiVideos_B, "1. Cria video")
@@ -76,7 +76,7 @@ System_Boundary(block_print, "BLOCO E - Print Workers (Paralelo)") {
   Container(kedaPrint_E, "Print Workers (N)", "KEDA", "Consome SQS paralelo")
   Container(jobPrint_E, "FFmpeg Print", "Bun", "Extrai frames via HTTP Range")
   ContainerDb(s3Frames_E, "S3 Frames", "S3", "Salva frames")
-  ContainerDb(cassandra_E, "ScyllaDB", "CQL", "Progresso")
+  ContainerDb(cassandra_E, "Cassandra", "CQL", "Progresso")
 }
 
 Rel(sqsPrint_C, kedaPrint_E, "10. Poll (N workers)")

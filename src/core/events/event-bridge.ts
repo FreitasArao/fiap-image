@@ -58,17 +58,34 @@ export class DefaultEventBridge {
       const response = await this.client.send(command)
 
       this.logger.log('Event sent to EventBridge', {
+        event: 'eventbridge.event.published',
+        resource: 'DefaultEventBridge',
+        message: 'Event sent to EventBridge',
+        status: 'success',
+        'eventbridge.source': event.metadata.source,
+        'eventbridge.detailType': event.metadata.eventType,
         messageId: event.metadata.messageId,
-        eventType: event.metadata.eventType,
         failedEntryCount: response.FailedEntryCount,
       })
 
       return Result.ok(response)
     } catch (error) {
       this.logger.error('Failed to send event to EventBridge', {
-        error,
+        event: 'eventbridge.event.publish_failed',
+        resource: 'DefaultEventBridge',
+        message: 'Failed to send event to EventBridge',
+        status: 'failure',
+        error:
+          error instanceof Error
+            ? {
+                message: error.message,
+                kind: error.constructor.name,
+                stack: error.stack,
+              }
+            : { message: String(error), kind: 'Error' },
+        'eventbridge.source': event.metadata.source,
+        'eventbridge.detailType': event.metadata.eventType,
         messageId: event.metadata.messageId,
-        eventType: event.metadata.eventType,
       })
       return Result.fail(
         error instanceof Error ? error : new Error(String(error)),

@@ -1,18 +1,22 @@
 # Elysia with Bun runtime
 
-## Getting Started
-To get started with this template, simply paste this command into your terminal:
+## Decisões de infraestrutura e arquitetura
+
+**Muito importante ler as decisões, principalmente *Justificativa de Infraestrutura*, mostra toda a perspectiva final consolidada e os ADRs ao longo do tempo .**
+
+- **[Justificativa de Infraestrutura](docs/infrastructure-decision.md)** — Visão geral da arquitetura, presigned URLs, EventBridge, Cassandra, custos e decisões consolidadas.
+- **[ADRs (Architecture Decision Records)](docs/adrs/)** — Decisões arquiteturais numeradas (banco de dados, monolito modular, workers, arquivamento S3, etc.).
+
+Consulte esses documentos para entender o contexto técnico e as restrições do projeto.
+
+---
+
+## Desenvolvimento
 ```bash
-bun create elysia ./elysia-example
+docker compose up -d
 ```
 
-## Development
-To start the development server run:
-```bash
-bun run dev
-```
-
-Open http://localhost:3000/ with your browser to see the result.
+Open http://localhost:3002/docs
 
 ## Testes
 

@@ -1,10 +1,13 @@
 import { Result } from '@core/domain/result'
 import { DefaultEventBridge } from '@core/events/event-bridge'
 import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import { msToNs } from '@core/libs/logging/log-event'
 import { CorrelationStore } from '@core/libs/context'
 import { EnvelopeFactory } from '@core/messaging'
 import type { Video } from '@modules/video-processor/domain/entities/video'
 import type { VideoRepository } from '@modules/video-processor/domain/repositories/video.repository'
+
+const resource = 'ReconcileUploadService'
 
 export type ReconcileParams = {
   video: Video
@@ -43,22 +46,30 @@ export class ReconcileUploadService {
   async reconcile(
     params: ReconcileParams,
   ): Promise<Result<ReconcileResult, Error>> {
+    const startTime = performance.now()
     const { video } = params
     const videoId = video.id.value
 
     const correlationId = CorrelationStore.correlationId ?? params.correlationId
     const traceId = CorrelationStore.traceId ?? params.traceId
 
-    this.logger.log(`[ReconcileUpload] Starting reconciliation`, { videoId })
+    this.logger.log('Video reconcile started', {
+      event: 'video.reconcile.started',
+      resource,
+      message: 'Starting reconciliation',
+      'video.id': videoId,
+    })
 
     if (video.isAlreadyUploaded()) {
-      this.logger.log(
-        `[ReconcileUpload] Video already uploaded, skipping (idempotent)`,
-        {
-          videoId,
-          currentStatus: video.status.value,
-        },
-      )
+      this.logger.log('Video reconcile completed (skipped, idempotent)', {
+        event: 'video.reconcile.completed',
+        resource,
+        message: 'Video already uploaded, skipping',
+        status: 'skipped',
+        duration: msToNs(performance.now() - startTime),
+        'video.id': videoId,
+        'video.status': video.status.value,
+      })
       return Result.ok({
         skipped: true,
         reason: 'already_processed',
@@ -74,10 +85,14 @@ export class ReconcileUploadService {
     )
 
     if (!transitioned) {
-      this.logger.log(
-        `[ReconcileUpload] Concurrent update detected, skipping`,
-        { videoId },
-      )
+      this.logger.log('Video reconcile completed (skipped, concurrent update)', {
+        event: 'video.reconcile.completed',
+        resource,
+        message: 'Concurrent update detected, skipping',
+        status: 'skipped',
+        duration: msToNs(performance.now() - startTime),
+        'video.id': videoId,
+      })
       return Result.ok({
         skipped: true,
         reason: 'concurrent_update',
@@ -87,13 +102,22 @@ export class ReconcileUploadService {
 
     const transitionResult = video.completeUpload()
     if (transitionResult.isFailure) {
-      this.logger.error(
-        `[ReconcileUpload] Failed to transition video status in entity`,
-        {
-          videoId,
-          error: transitionResult.error,
-        },
-      )
+      this.logger.error('Video reconcile failed (entity transition)', {
+        event: 'video.reconcile.completed',
+        resource,
+        message: 'Failed to transition video status in entity',
+        status: 'failure',
+        duration: msToNs(performance.now() - startTime),
+        error:
+          transitionResult.error instanceof Error
+            ? {
+                message: transitionResult.error.message,
+                kind: transitionResult.error.constructor.name,
+                stack: transitionResult.error.stack,
+              }
+            : { message: String(transitionResult.error), kind: 'Error' },
+        'video.id': videoId,
+      })
     }
 
     const events = video.domainEvents
@@ -106,14 +130,33 @@ export class ReconcileUploadService {
 
     if (eventResults.some((r) => r.isFailure)) {
       const failedEvent = eventResults.find((r) => r.isFailure)
-      this.logger.error(`[ReconcileUpload] Failed to emit some events`, {
-        videoId,
-        error: failedEvent?.error,
+      const err = failedEvent?.error
+      this.logger.error('Video reconcile failed (event emission)', {
+        event: 'video.reconcile.completed',
+        resource,
+        message: 'Failed to emit some events',
+        status: 'failure',
+        duration: msToNs(performance.now() - startTime),
+        error:
+          err instanceof Error
+            ? {
+                message: err.message,
+                kind: err.constructor.name,
+                stack: err.stack,
+              }
+            : { message: String(err), kind: 'Error' },
+        'video.id': videoId,
       })
     }
 
-    this.logger.log(`[ReconcileUpload] Reconciliation completed successfully`, {
-      videoId,
+    this.logger.log('Video reconcile completed successfully', {
+      event: 'video.reconcile.completed',
+      resource,
+      message: 'Reconciliation completed successfully',
+      status: 'success',
+      duration: msToNs(performance.now() - startTime),
+      'video.id': videoId,
+      'video.status': 'UPLOADED',
       eventsEmitted: events.length,
     })
 

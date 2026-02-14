@@ -1,11 +1,14 @@
 import { Result } from '@core/domain/result'
 import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import { msToNs } from '@core/libs/logging/log-event'
 import { CorrelationStore } from '@core/libs/context'
 import {
   createStoragePathBuilder,
   StoragePathBuilder,
 } from '@modules/video-processor/infra/services/storage'
 import { SqsUploadReconciler } from '@modules/video-processor/domain/services/sqs-upload-reconciler.service'
+
+const resource = 'CompleteMultipartHandler'
 
 export type CompleteMultipartEvent = {
   detail: {
@@ -40,17 +43,20 @@ export class CompleteMultipartHandler {
   }
 
   async handle(event: CompleteMultipartEvent): Promise<Result<void, Error>> {
+    const startTime = performance.now()
     const { key } = event.detail.object
     const { name: bucket } = event.detail.bucket
 
     // correlationId is obtained implicitly from CorrelationStore (set by SQS consumer)
-    // Fallback to a new UUID only if no context exists
     const correlationId = CorrelationStore.correlationId ?? crypto.randomUUID()
 
-    // correlationId is automatically included in logs via Pino mixin
-    this.logger.log('Received S3 CompleteMultipartUpload event', {
-      key,
-      bucket,
+    this.logger.log('S3 multipart event received', {
+      event: 's3.multipart.received',
+      resource,
+      message: 'Received S3 CompleteMultipartUpload event',
+      's3.bucket': bucket,
+      's3.key': key,
+      's3.objectKey': key,
     })
 
     // 1. Parse the storage path to extract videoId
@@ -58,10 +64,18 @@ export class CompleteMultipartHandler {
     const parsed = this.pathBuilder.parse(fullPath)
 
     if (!parsed) {
-      this.logger.error('Invalid storage path format', {
-        key,
-        fullPath,
-        event: JSON.stringify(event),
+      this.logger.error('S3 multipart handling failed (invalid path)', {
+        event: 's3.multipart.completed',
+        resource,
+        message: 'Invalid storage path format',
+        status: 'failure',
+        duration: msToNs(performance.now() - startTime),
+        error: {
+          message: 'Invalid storage path format',
+          kind: 'ValidationError',
+        },
+        's3.bucket': bucket,
+        's3.key': key,
       })
       return Result.fail(new Error('Invalid storage path format'))
     }
@@ -75,9 +89,24 @@ export class CompleteMultipartHandler {
     })
 
     if (reconcileResult.isFailure) {
-      this.logger.error('Reconciliation failed', {
-        videoId,
-        error: reconcileResult.error,
+      const err = reconcileResult.error
+      this.logger.error('S3 multipart handling failed (reconciliation)', {
+        event: 's3.multipart.completed',
+        resource,
+        message: 'Reconciliation failed',
+        status: 'failure',
+        duration: msToNs(performance.now() - startTime),
+        error:
+          err instanceof Error
+            ? {
+                message: err.message,
+                kind: err.constructor.name,
+                stack: err.stack,
+              }
+            : { message: String(err), kind: 'Error' },
+        's3.bucket': bucket,
+        's3.key': key,
+        'video.id': videoId,
       })
       return Result.fail(reconcileResult.error)
     }
@@ -85,17 +114,26 @@ export class CompleteMultipartHandler {
     const result = reconcileResult.value
 
     if (result.skipped) {
-      this.logger.log('Reconciliation skipped (idempotent)', {
-        videoId,
+      this.logger.log('S3 multipart completed (skipped, idempotent)', {
+        event: 's3.multipart.completed',
+        resource,
+        message: 'Reconciliation skipped (idempotent)',
+        status: 'skipped',
+        duration: msToNs(performance.now() - startTime),
+        'video.id': videoId,
         reason: result.reason,
       })
-      // Return success even if skipped - this is expected for idempotent processing
       return Result.ok()
     }
 
-    this.logger.log('Reconciliation completed successfully', {
-      videoId,
-      status: result.status,
+    this.logger.log('S3 multipart completed successfully', {
+      event: 's3.multipart.completed',
+      resource,
+      message: 'Reconciliation completed successfully',
+      status: 'success',
+      duration: msToNs(performance.now() - startTime),
+      'video.id': videoId,
+      'video.status': result.status,
     })
 
     return Result.ok()

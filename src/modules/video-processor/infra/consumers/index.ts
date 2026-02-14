@@ -36,13 +36,22 @@ export function startConsumers(): void {
   consumerInstance = createCompleteMultipartConsumer(logger, handler, queueUrl)
 
   consumerInstance.start()
-  logger.log('CompleteMultipartConsumer started', { queueUrl })
+  logger.log('CompleteMultipartConsumer started', {
+    event: 'sqs.consumer.started',
+    resource: 'CompleteMultipartConsumer',
+    message: 'CompleteMultipartConsumer started',
+    'sqs.queueUrl': queueUrl,
+  })
 }
 
 export function stopConsumers(): void {
   if (consumerInstance) {
     consumerInstance.stop()
-    logger.log('CompleteMultipartConsumer stopped')
+    logger.log('CompleteMultipartConsumer stopped', {
+      event: 'sqs.consumer.stopped',
+      resource: 'CompleteMultipartConsumer',
+      message: 'CompleteMultipartConsumer stopped',
+    })
   }
 }
 

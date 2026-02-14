@@ -15,6 +15,7 @@ import {
   PartSizePolicyError,
 } from '@core/errors/part-size-policy.error'
 import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import { msToNs } from '@core/libs/logging/log-event'
 
 export type CreateVideoUseCaseParams = {
   totalSize: number
@@ -37,33 +38,62 @@ export class CreateVideoUseCase {
     private readonly logger: AbstractLoggerService,
   ) {}
 
+  private toErrorPayload(error: unknown): {
+    message: string
+    kind: string
+    stack?: string
+  } {
+    if (error instanceof Error) {
+      return {
+        message: error.message,
+        kind: error.constructor.name,
+        stack: error.stack,
+      }
+    }
+    return { message: String(error), kind: 'Error' }
+  }
+
   async execute(
     params: CreateVideoUseCaseParams,
   ): Promise<Result<CreateVideoUseCaseResult, Error>> {
-    this.logger.log('Creating video', {
-      totalSize: params.totalSize,
-      duration: params.duration,
-      filename: params.filename,
-      extension: params.extension,
+    const startTime = performance.now()
+    const resource = 'CreateVideoUseCase'
+
+    this.logger.log('Create video request started', {
+      event: 'video.create.started',
+      resource,
+      message: 'Create video request started',
+      'video.filename': params.filename,
+      'video.totalSize': params.totalSize,
+      'video.duration': params.duration,
     })
 
     const extensionResult = VideoExtensionVO.create(params.extension)
     if (extensionResult.isFailure) {
-      this.logger.error('Invalid video extension', {
-        extension: params.extension,
-        error: extensionResult.error,
+      this.logger.error('Create video failed', {
+        event: 'video.create.completed',
+        resource,
+        message: 'Invalid video extension',
+        status: 'failure',
+        duration: msToNs(performance.now() - startTime),
+        error: this.toErrorPayload(extensionResult.error),
+        'video.filename': params.filename,
       })
       return Result.fail(extensionResult.error)
     }
 
     const videoId = UniqueEntityID.create().value
 
-    this.logger.log('Video ID created', { videoId })
-
     const policy = PartSizePolicy.calculate(params.totalSize)
     if (policy.isFailure) {
-      this.logger.error('Failed to calculate part size policy', {
-        error: policy.error,
+      this.logger.error('Create video failed', {
+        event: 'video.create.completed',
+        resource,
+        message: 'Failed to calculate part size policy',
+        status: 'failure',
+        duration: msToNs(performance.now() - startTime),
+        error: this.toErrorPayload(policy.error),
+        'video.filename': params.filename,
       })
       return Result.fail(policy.error)
     }
@@ -75,15 +105,17 @@ export class CreateVideoUseCase {
       fullFilename,
     )
     if (thirdPartyVideoResult.isFailure) {
-      this.logger.error('Failed to create upload ID', {
-        error: thirdPartyVideoResult.error,
+      this.logger.error('Create video failed', {
+        event: 'video.create.completed',
+        resource,
+        message: 'Failed to create upload ID',
+        status: 'failure',
+        duration: msToNs(performance.now() - startTime),
+        error: this.toErrorPayload(thirdPartyVideoResult.error),
+        'video.filename': params.filename,
       })
       return Result.fail(thirdPartyVideoResult.error)
     }
-
-    this.logger.log('Upload ID created', {
-      uploadId: thirdPartyVideoResult.value.uploadId,
-    })
 
     const uploadId = thirdPartyVideoResult.value.uploadId
 
@@ -102,17 +134,30 @@ export class CreateVideoUseCase {
         storagePath: thirdPartyVideoResult.value.key,
       })
 
-    this.logger.log('Video created', { video })
-
     this.createParts(policy, video)
 
     const result = await this.videoRepository.createVideo(video)
     if (result.isFailure) {
-      this.logger.error('Failed to create video', { error: result.error })
+      this.logger.error('Create video failed', {
+        event: 'video.create.completed',
+        resource,
+        message: 'Failed to create video in repository',
+        status: 'failure',
+        duration: msToNs(performance.now() - startTime),
+        error: this.toErrorPayload(result.error),
+        'video.filename': params.filename,
+      })
       return Result.fail(result.error)
     }
 
-    this.logger.log('Video created', { video: video.id.value })
+    this.logger.log('Create video completed', {
+      event: 'video.create.completed',
+      resource,
+      message: 'Create video completed',
+      status: 'success',
+      duration: msToNs(performance.now() - startTime),
+      'video.id': video.id.value,
+    })
     return Result.ok({
       video,
       uploadId,

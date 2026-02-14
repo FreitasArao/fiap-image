@@ -1,6 +1,6 @@
 # Justificativa de Infraestrutura - Video Processor
 
-## Documento Técnico para Apresentação ao Tech Lead
+## Documento Técnico
 
 ---
 
@@ -29,7 +29,7 @@ flowchart TB
     subgraph API[FIAPX API]
         CreateVideo["POST /videos"]
         GetURLs["GET /upload-urls"]
-        ReportPart["POST /parts/{n}"]
+        ReportPart["POST /parts/n"]
         Complete["POST /complete"]
     end
 
@@ -56,7 +56,7 @@ flowchart TB
     User -->|3. GET /upload-urls| GetURLs
     GetURLs -->|4. batch 20 URLs| User
     User -->|5. Upload direto| S3
-    User -->|6. POST /parts/{n} + ETag| ReportPart
+    User -->|6. POST /parts/n + ETag| ReportPart
     ReportPart --> Cassandra
     User -->|7. POST /complete| Complete
     Complete -->|CompleteMultipartUpload| S3
@@ -70,7 +70,88 @@ flowchart TB
 
 ---
 
-## 2. Presigned URLs - Upload Direto no S3
+## 2. Arquitetura Tradicional (Referência)
+
+Esta seção descreve a **arquitetura tradicional completa** usada como baseline de comparação nas decisões deste documento. Ela reúne upload via proxy, Lambda como intermediário de eventos e RDS como banco.
+
+### Visão da Arquitetura Tradicional
+
+```mermaid
+flowchart TB
+    subgraph Frontend[Frontend]
+        User[Usuário]
+    end
+
+    subgraph Backend[Backend API - Proxy]
+        UploadAPI[POST /upload]
+        UploadAPI -->|bytes do vídeo| UploadAPI
+    end
+
+    subgraph AWS[AWS]
+        S3[(S3 Bucket)]
+        Lambda[Lambda S3 Trigger]
+        RDS[(RDS PostgreSQL)]
+    end
+
+    subgraph Processamento[Processamento]
+        LambdaFFmpeg[Lambda FFmpeg]
+    end
+
+    User -->|1. Upload 1GB| UploadAPI
+    UploadAPI -->|2. Proxy 1GB| S3
+    S3 -->|3. Evento Object Created| Lambda
+    Lambda -->|4. Atualiza status| RDS
+    Lambda -->|5. Invoca| LambdaFFmpeg
+    LambdaFFmpeg -->|6. Split/Print| S3
+```
+
+### Stack de Componentes
+
+| Componente | Função na arquitetura tradicional |
+|------------|-----------------------------------|
+| **Backend API (EC2/ECS)** | Recebe o upload do cliente (proxy); envia bytes ao S3; consome CPU/RAM e bandwidth |
+| **S3** | Armazena o vídeo enviado pelo backend (não pelo cliente) |
+| **Lambda (S3 trigger)** | Intermediário: disparada pelo evento S3, atualiza banco, invoca próxima Lambda |
+| **RDS PostgreSQL** | Banco relacional para vídeos, partes e metadados; escalabilidade vertical |
+| **Lambda FFmpeg** | Processamento Split/Print; limite 15 min, payload 6 MB; cold start |
+
+### Fluxo Completo (Sequência)
+
+```mermaid
+sequenceDiagram
+    participant U as Usuário
+    participant API as Backend API Proxy
+    participant S3 as AWS S3
+    participant Lambda as Lambda Trigger
+    participant RDS as RDS PostgreSQL
+    participant FF as Lambda FFmpeg
+
+    U->>API: POST /upload (stream 1GB)
+    API->>S3: PUT Object (1GB)
+    Note over API,S3: Latência 2x, bandwidth 2x
+    S3->>Lambda: Evento Object Created
+    Lambda->>RDS: UPDATE video SET status
+    Lambda->>FF: Invoke (payload)
+    Note over Lambda,FF: Cold start 100ms-3s
+    FF->>FF: Split/Print (max 15 min)
+    FF->>S3: Grava resultados
+```
+
+### Limitações e Problemas
+
+| Área | Problema |
+|------|----------|
+| **Upload** | Backend recebe e reenvia 1GB por vídeo: latência 2x, custo de data transfer 2x, necessidade de servidor maior (4 vCPU, 8 GB RAM) |
+| **Eventos** | Lambda como intermediário: cold start, custo por execução, limite de concorrência (1.000 simultâneas por padrão), código extra para manter |
+| **Processamento** | Lambda: timeout 15 min, payload 6 MB; para vídeo 1h e 100 partes exige orquestração e mais Lambdas |
+| **Banco** | RDS: escalabilidade vertical, sharding manual, custo maior (~$1.500/mês para Multi-AZ) |
+| **Custo total** | Para 10.000 vídeos/mês: ~$2.030/mês (proxy + Lambda + RDS + processamento) |
+
+As seções seguintes justificam a substituição de cada um desses componentes pela arquitetura proposta (Presigned URLs, EventBridge + SQS, Cassandra, KEDA Workers).
+
+---
+
+## 3. Presigned URLs - Upload Direto no S3
 
 ### Por que NÃO usar o Backend como Proxy?
 
@@ -178,7 +259,7 @@ sequenceDiagram
 
 ---
 
-## 3. EventBridge vs Lambda
+## 4. EventBridge vs Lambda
 
 ### Por que NÃO usar Lambda?
 
@@ -216,7 +297,6 @@ S3 Event → EventBridge → SNS Topic → SQS Queue → Consumer
 | **Latência p99** | 500ms - 3s | 150ms |
 | **Fan-out** | Manual | Nativo (SNS) |
 | **Retry** | Configurável | 3 camadas (EB + SNS + SQS) |
-| **Extensibilidade** | Baixa | Alta (novas subscriptions) |
 
 ### Comparativo de Custos
 
@@ -276,7 +356,7 @@ Cenário: Cliente crashou após upload mas antes de reportar
 
 ---
 
-## 4. Por que Banco Colunar e NÃO Relacional?
+## 5. Por que Banco Colunar e NÃO Relacional?
 
 ### O Problema com Bancos Relacionais
 
@@ -294,11 +374,11 @@ Bancos relacionais (PostgreSQL, MySQL) têm:
 
 ### Por que NÃO Document Store (MongoDB)?
 
-| Critério | MongoDB | ScyllaDB |
-|----------|---------|----------|
-| **Latência p99** | 5-10ms | 1-2ms |
-| **Write throughput** | ~100K ops/s | ~1M+ ops/s |
-| **Custo de memória** | Alto (índices em RAM) | Baixo (design eficiente) |
+| Critério | MongoDB | Cassandra |
+|----------|---------|-----------|
+| **Latência p99** | 5-10ms | 10-50ms |
+| **Write throughput** | ~100K ops/s | ~100K ops/s |
+| **Custo de memória** | Alto (índices em RAM) | Moderado |
 | **Consistência** | Configurável | Tunable por query |
 | **Document locking** | Sim (updates frequentes) | Não |
 | **Storage overhead** | Alto (BSON) | Baixo |
@@ -309,7 +389,7 @@ Bancos relacionais (PostgreSQL, MySQL) têm:
 - Custo de storage maior (BSON overhead)
 - Não é otimizado para time-series data
 
-### ScyllaDB vs Alternativas
+### Cassandra vs Alternativas
 
 | Critério | PostgreSQL | MongoDB | Cassandra | ScyllaDB |
 |----------|------------|---------|-----------|----------|
@@ -319,55 +399,53 @@ Bancos relacionais (PostgreSQL, MySQL) têm:
 | **GC Pauses** | N/A | Sim | Sim (JVM) | Zero |
 | **Compatibilidade** | SQL | MongoDB | CQL | CQL 100% |
 
+**Decisão (ADR 003):** Cassandra foi escolhido para balancear custo, escalabilidade e simplicidade operacional em fase de startup. O pipeline assíncrono tolera latência p99 de ~10-50ms.
+
 ---
 
-## 5. Por que ScyllaDB e NÃO Cassandra?
+## 6. Por que Cassandra e NÃO ScyllaDB?
 
-### O Problema do Cassandra
+### Decisão (ADR 003)
 
-Apache Cassandra é escrito em Java e roda na JVM, o que causa:
-- **GC Pauses**: pausas de 100ms+ durante garbage collection
-- **Latência inconsistente**: p99 de 10-50ms
-- **Baixa eficiência de CPU**: ~30% de utilização
-- **Mais nós necessários**: para compensar ineficiência
+Usar **Cassandra (wide-column)** para balancear custo, escalabilidade e simplicidade operacional. ScyllaDB oferece maior performance e menor latência, mas o custo de operação é elevado para uma startup em fase inicial.
 
-### ScyllaDB: Cassandra Reescrito em C++
+### Por que NÃO ScyllaDB (nesta fase)?
 
-ScyllaDB é uma reimplementação do Cassandra em C++ com:
-- **Zero GC**: sem pausas de garbage collection
-- **Shard-per-core**: cada core processa sua partição
-- **Latência consistente**: p99 de 1-2ms
-- **10x mais throughput**: por nó
+- **Custo operacional**: ScyllaDB Cloud ou self-managed com sizing adequado tem custo maior que Cassandra em 3 nós
+- **Orçamento de startup**: Prioridade é velocidade de entrega e custo controlado
+- **Pipeline assíncrono**: O processamento de vídeo leva minutos; latência p99 de ~10-50ms do Cassandra é aceitável
 
-### Comparativo Detalhado
+### O que o Cassandra entrega
+
+- **Compatibilidade CQL**: Mesmo modelo de dados e drivers que permitiriam migrar para ScyllaDB no futuro
+- **Ecossistema maduro**: Documentação e suporte da comunidade
+- **Query-first design**: Camada de persistência abstrata (repositórios) desacopla a aplicação do banco
+- **Escalabilidade horizontal**: Adicionar nós ou migrar para ScyllaDB depois é viável
+
+### Comparativo (contexto da decisão)
 
 | Métrica | Cassandra | ScyllaDB |
 |---------|-----------|----------|
-| **Linguagem** | Java (JVM) | C++ (nativo) |
-| **GC Pauses** | Frequentes (100ms+) | Zero |
 | **Latência p99** | 10-50ms | 1-2ms |
 | **Throughput** | 100K ops/s/node | 1M+ ops/s/node |
-| **CPU/node** | ~30% eficiência | ~90% eficiência |
-| **Nós necessários** | 10 | 3 (mesmo workload) |
-| **Compatibilidade CQL** | - | 100% |
+| **Custo operacional** | Menor (escolhido) | Maior |
+| **Compatibilidade CQL** | Nativo | 100% |
 | **Driver** | cassandra-driver | cassandra-driver (mesmo!) |
 
-### Compatibilidade Total
-
-ScyllaDB usa o **mesmo driver** do Cassandra. Nosso código atual:
+### Código atual (driver CQL)
 
 ```typescript
 // src/core/libs/database/datasource.ts
 import cassandra from 'cassandra-driver'
 
 this.client = new cassandra.Client({
-  contactPoints: ['scylladb-node1', 'scylladb-node2'],
+  contactPoints: ['cassandra-node1', 'cassandra-node2'],
   keyspace: 'fiap_image',
   localDataCenter: 'datacenter1',
 })
 ```
 
-**Zero mudança de código para migrar de Cassandra para ScyllaDB.**
+Migração futura para ScyllaDB exigiria apenas troca de `contactPoints` e tuning; o modelo de dados permanece.
 
 ### Comparativo de Custos - Banco de Dados
 
@@ -380,13 +458,13 @@ this.client = new cassandra.Client({
 | **MongoDB Atlas** | M40 (3 nodes) | $1,200 | $14,400 |
 | **AWS Keyspaces** | On-demand | $800 | $9,600 |
 | **ScyllaDB Cloud** | i3.xlarge (3 nodes) | $600 | $7,200 |
-| **ScyllaDB Self-Managed** | 3x m5.xlarge EC2 | $400 | $4,800 |
+| **Cassandra (3 nodes)** | 3x m5.xlarge EC2 | $400 | $4,800 |
 
-**Economia ScyllaDB vs RDS: 73-87%**
+**Economia Cassandra vs RDS: 73-87%**
 
 ---
 
-## 6. Modelo de Dados Query-First
+## 7. Modelo de Dados Query-First
 
 ### Design Orientado a Queries
 
@@ -410,46 +488,20 @@ SELECT * FROM integrations_by_video WHERE video_id = ?
 
 ### Schema Otimizado para Vídeos 1GB/1hora
 
-```mermaid
-erDiagram
-    videos_by_id ||--o{ video_parts_by_video : contains
-    videos_by_id ||--o{ video_metadata_by_video : has
-    videos_by_id ||--o{ integrations_by_video : integrates
-    integrations_by_video }o--|| third_party_integrations : references
+Relacionamentos: `videos_by_id` contém N `video_parts_by_video`, tem 1 `video_metadata_by_video`, integra N `integrations_by_video`; `integrations_by_video` referencia `third_party_integrations`.
 
-    videos_by_id {
-        uuid video_id PK
-        text status
-        timestamp created_at
-        timestamp updated_at
-    }
+```text
+videos_by_id
+  video_id (PK), status, created_at, updated_at
 
-    video_parts_by_video {
-        uuid video_id PK
-        bigint part_number CK
-        bigint size "10MB cada"
-        bigint duration "36s cada"
-        timestamp created_at
-        timestamp updated_at
-    }
+video_parts_by_video
+  video_id (PK), part_number (CK), size (~10MB/parte), duration (~36s/parte), created_at, updated_at
 
-    video_metadata_by_video {
-        uuid video_id PK
-        bigint total_size "1GB"
-        bigint duration "3600s"
-        list parts_urls "100 URLs"
-        timestamp created_at
-        timestamp updated_at
-    }
+video_metadata_by_video
+  video_id (PK), total_size (1GB), duration (3600s), parts_urls (100 URLs), created_at, updated_at
 
-    integrations_by_video {
-        uuid video_id PK
-        uuid integration_id CK
-        text third_party_video_id
-        text third_party_name
-        timestamp created_at
-        timestamp updated_at
-    }
+integrations_by_video
+  video_id (PK), integration_id (CK), third_party_video_id, third_party_name, created_at, updated_at
 ```
 
 ### Dados por Vídeo de 1GB/1hora
@@ -474,7 +526,7 @@ erDiagram
 
 ---
 
-## 7. Alta Disponibilidade e Consistência Eventual
+## 8. Alta Disponibilidade e Consistência Eventual
 
 ### Por que Consistência Eventual é Aceitável?
 
@@ -553,7 +605,7 @@ stateDiagram-v2
 
 ---
 
-## 8. Desacoplamento e Ganhos Arquiteturais
+## 9. Desacoplamento e Ganhos Arquiteturais
 
 ### Arquitetura em Camadas
 
@@ -579,7 +631,7 @@ flowchart TB
 
     subgraph External[External Services]
         S3[(AWS S3)]
-        ScyllaDB[(ScyllaDB)]
+        Cassandra[(Cassandra)]
         SQS[AWS SQS]
     end
 
@@ -596,7 +648,7 @@ flowchart TB
     SQSPublisher --> SQS
 
     VideoRepo --> DataSource
-    DataSource --> ScyllaDB
+    DataSource --> Cassandra
 ```
 
 ### Ganhos do Desacoplamento
@@ -604,11 +656,11 @@ flowchart TB
 | Ganho | Descrição |
 |-------|-----------|
 | **Testabilidade** | Mock de Repository e Services para testes unitários |
-| **Flexibilidade** | Trocar ScyllaDB sem alterar domínio |
+| **Flexibilidade** | Trocar Cassandra sem alterar domínio |
 | **Manutenibilidade** | Separação clara de responsabilidades |
 | **Escalabilidade** | API, Workers e Jobs escalam independentemente |
 | **Event-driven** | EventBridge desacopla upload de processamento |
-| **Observabilidade** | Logs e métricas por camada |
+| **Observabilidade** | Logs estruturados e métricas por camada (event, resource, duration); log-based metrics no Datadog (ADR 016) |
 
 ### Exemplo de Teste Unitário
 
@@ -629,41 +681,6 @@ expect(mockRepo.create).toHaveBeenCalledWith(
 
 ---
 
-## 9. Resumo de Custos Consolidado
-
-### Cenário: 10.000 vídeos de 1GB por mês
-
-| Componente | Arquitetura Tradicional | Arquitetura Proposta | Economia Mensal |
-|------------|------------------------|---------------------|-----------------|
-| **Upload (Proxy vs Presigned)** | $320 | $0 | $320 |
-| **Eventos (Lambda vs EventBridge)** | $85 | $1 | $84 |
-| **Banco (RDS vs ScyllaDB)** | $1,500 | $400 | $1,100 |
-| **Total Mensal** | **$1,905** | **$401** | **$1,504** |
-| **Total Anual** | **$22,860** | **$4,812** | **$18,048** |
-| **Economia** | - | - | **79%** |
-
-### Distribuição da Economia
-
-```mermaid
-pie title Economia Anual por Componente ($18,048 total)
-    "Upload Presigned" : 3840
-    "EventBridge" : 1008
-    "ScyllaDB" : 13200
-```
-
-### Escalabilidade de Custos
-
-| Volume | Tradicional | Proposta | Economia |
-|--------|-------------|----------|----------|
-| **1.000 vídeos/mês** | $1,595 | $401 | 75% |
-| **10.000 vídeos/mês** | $1,905 | $401 | 79% |
-| **100.000 vídeos/mês** | $3,905 | $411 | 89% |
-| **1.000.000 vídeos/mês** | $19,005 | $510 | 97% |
-
-**A economia aumenta com a escala** - arquitetura proposta tem custo quase linear.
-
----
-
 ## 10. Conclusão
 
 ### Decisões e Justificativas
@@ -672,7 +689,7 @@ pie title Economia Anual por Componente ($18,048 total)
 |---------|---------------|----------|
 | **Presigned URLs** | Zero proxy, latência 50% menor, escalabilidade infinita | $320/mês |
 | **EventBridge** | Zero cold start, sem código, custo por evento | $84/mês |
-| **ScyllaDB** | 10x mais rápido que Cassandra, compatível CQL | $1,100/mês |
+| **Cassandra** | Custo menor que ScyllaDB/RDS, CQL, pipeline assíncrono tolera p99 ~10-50ms (ADR 003) | $1,100/mês |
 | **Query-First Design** | Latência O(1), zero JOINs, partition key | Performance |
 | **Consistência Eventual** | Processo leva minutos, ACID desnecessário | Simplificação |
 | **Desacoplamento** | Testabilidade, flexibilidade, manutenibilidade | Qualidade |
@@ -680,7 +697,7 @@ pie title Economia Anual por Componente ($18,048 total)
 ### Resumo Executivo
 
 - **Economia total**: 79% de redução no TCO ($18,048/ano)
-- **Performance**: Latência p99 de 1-2ms (vs 10-50ms)
+- **Performance**: Latência p99 ~10-50ms (Cassandra), aceitável para pipeline assíncrono
 - **Escalabilidade**: Horizontal, automática, sem limites
 - **Disponibilidade**: 99.99% SLA, zero single point of failure
 - **Manutenibilidade**: Zero código Lambda, infraestrutura declarativa
@@ -810,7 +827,175 @@ URLs pré-assinadas geradas em batches de 20 sob demanda:
 
 ---
 
-## 13. Estimativa de Custos Consolidada (10.000 vídeos/mês)
+## 13. Monolito Modular com Workers (ADR 009)
+
+### Decisão
+
+Adotar **monolito modular com workers deployáveis independentemente**: um único repositório, boundaries claros por pastas, comunicação event-driven (SQS + EventBridge) e deploy independente (Dockerfiles separados para API e workers). Ver [ADR 009](adrs/09.md).
+
+### Justificativa para startup
+
+- **Velocidade de desenvolvimento**: um repositório, um `bun install`, refatoração fácil
+- **Custo operacional baixo**: sem overhead de múltiplos repositórios nem contratos entre times
+- **Evolução incremental**: arquitetura que cresce com o produto; microserviços seriam prematuros
+
+### Estrutura do monorepo
+
+```
+fiap-image/
+├── src/
+│   ├── core/                    # Código compartilhado (logging, database, abstractions)
+│   ├── modules/
+│   │   ├── video-processor/     # Módulo da API
+│   │   └── messaging/sqs/       # Abstração SQS reutilizável
+│   └── index.ts                 # Entrypoint da API
+├── workers/
+│   └── src/
+│       ├── split-worker.ts
+│       ├── print-worker.ts
+│       └── ffmpeg.service.ts
+├── Dockerfile.api
+├── Dockerfile.workers
+└── package.json
+```
+
+### Boundaries e fluxo
+
+| Aspecto | Implementação |
+|---------|---------------|
+| **Codebase** | Único (monorepo) |
+| **Módulos** | Boundaries claros via pastas |
+| **Comunicação** | Event-driven (SQS + EventBridge) |
+| **Deploy** | Independente (API vs Workers) |
+| **Compartilhamento** | Core libs importadas diretamente |
+
+```mermaid
+flowchart TB
+    subgraph Monolito[Monolito Modular]
+        API[API Module video-processor]
+        CONSUMER[SQS Consumer CompleteMultipart]
+        CORE[Core logging database abstractions]
+        MSG[Messaging Module SQS]
+    end
+
+    subgraph Workers[Workers Deploy Independente]
+        ORCH[Orchestrator Worker]
+        PRINT[Print Worker]
+    end
+
+    API --> CORE
+    API --> MSG
+    CONSUMER --> CORE
+    ORCH --> CORE
+    ORCH --> MSG
+    PRINT --> CORE
+    PRINT --> MSG
+
+    S3[S3] -.->|EB SNS SQS| CONSUMER
+    CONSUMER -.->|EB SNS SQS| ORCH
+    ORCH -.->|SQS direto| PRINT
+    PRINT -.->|EB SNS SQS| NW[Notification Worker]
+```
+
+### Fluxo de eventos (resumo)
+
+```
+S3 CompleteMultipartUpload → EventBridge → SNS → SQS (multipart-complete-queue)
+       → API Consumer (atualiza DB, emite UPLOADED)
+       → EventBridge → SNS → SQS (orchestrator-queue) → orchestrator-worker
+       → SQS (print-queue) → print-workers
+       → EventBridge → SNS → SQS (notification-queue) → SES
+```
+
+### Regras de dependência (workers)
+
+- **Podem importar**: `src/core/libs/logging/`, `src/core/abstractions/messaging/`, `src/modules/messaging/sqs/`
+- **Não podem importar**: `src/modules/video-processor/`, `src/modules/docs/`, `src/index.ts`
+
+### Caminho para microserviços
+
+A comunicação já é assíncrona (SQS/EventBridge); uma migração futura para microserviços seria basicamente extrair `@fiapx/core` e mover workers para outro repositório, com esforço estimado de 2–4 horas.
+
+---
+
+## 14. Arquivamento de Vídeos Raw em S3 Glacier Instant Retrieval (ADR 013)
+
+### Problema
+
+Após o processamento, o vídeo raw de 1GB permanece em S3 Standard ($0.023/GB/mês). Para 10.000 vídeos isso representa ~$230/mês (~$2.760/ano). O vídeo original raramente é acessado após o processamento, mas deve permanecer disponível para download eventual, reprocessamento e auditoria.
+
+### Decisão (ADR 013)
+
+Transicionar vídeos raw para **S3 Glacier Instant Retrieval** após a conclusão do processamento, usando o evento `COMPLETED` já existente. O **PrintWorker** aplica a tag `archive-status: ready` no objeto S3 ao concluir; uma **S3 Lifecycle Rule** com filtro por prefixo e tag transiciona para a classe `GLACIER_IR`. Ver [ADR 013](adrs/13.md).
+
+### Fluxo de arquivamento
+
+```
+PrintWorker (último segmento) → aplica tag no S3 (archive-status: ready)
+       ↓
+   EventBridge: COMPLETED → SES (email)
+       ↓
+   S3 Lifecycle (prefix videos/raw/ + tag) → transição para Glacier Instant Retrieval
+```
+
+### Por que Glacier Instant Retrieval?
+
+| Critério | Glacier IR | Deep Archive |
+|----------|------------|--------------|
+| Acesso | Imediato (ms) | 12-48 horas |
+| Storage | $0.004/GB | $0.00099/GB |
+| Retrieval | $0.03/GB | $0.02/GB |
+| UX Download | Transparente (presigned URLs iguais) | Inviável (espera horas) |
+
+Glacier IR mantém a experiência de download imediato para o usuário.
+
+### Economia e break-even
+
+- **Economia de storage**: ~83% (~$2.100/ano para 10k vídeos, cenário 5% de downloads)
+- **Break-even**: até ~63% de downloads/mês, Glacier IR é mais econômico que manter tudo em Standard
+
+| % Downloads/mês | Standard | Glacier IR | Economia |
+|-----------------|----------|------------|----------|
+| 5% | $0.023/GB | ~$0.0055/GB | ~76% |
+| 63% | $0.023/GB | $0.023/GB | 0% |
+
+---
+
+## 15. Observabilidade e Log-based Metrics (ADR 016)
+
+### Importância da observabilidade
+
+A observabilidade permite visibilidade por camada (HTTP, SQS, domínio vídeo), medir latência e taxa de sucesso por operação e rastrear erros sem instrumentação adicional de APM em todo o código. Logs estruturados com campos estáveis são a base para métricas e dashboards no Datadog.
+
+### Por que log-based metrics?
+
+Métricas são extraídas dos logs no Datadog (contagem, distribuição de duração, filtros por `event` e `status`) **sem novo deploy**. Campos padronizados (`event`, `resource`, `status`, `duration`, `error`) permitem criar métricas pela UI a partir dos logs já emitidos pela aplicação.
+
+### Convenção adotada (ADR 016)
+
+- **Eventos nomeados estáveis**: convenção `domínio.entidade.ação` (ex.: `video.create.completed`, `sqs.message.processed`, `http.request.completed`). O `event` não muda entre versões; mudanças em `message` não quebram monitors.
+- **Campos obrigatórios**: `message` (legível), `event`, `resource` (componente que emitiu o log).
+- **Campos condicionais**: `status` (`success` | `failure` | `skipped`), `duration` (nanosegundos), `error` (`message`, `kind`, `stack?` conforme Datadog).
+
+### Métricas que passam a existir
+
+| Tipo | Exemplo |
+|------|---------|
+| **Latência (Distribution)** | Criação de vídeo, geração de URLs, reconcile, HTTP por rota, processamento SQS — todos via `@event` + `@duration` |
+| **Taxa de sucesso/falha (Count)** | `count(@event:video.create.completed @status:success)` / `count(@event:video.create.completed)` |
+| **Volume (Count)** | Throughput por evento (ex.: `count(@event:video.create.started)`), volume SQS por `@resource` |
+
+Com essa convenção, métricas podem ser criadas no Datadog sem alteração de código adicional.
+
+**Referência**: [ADR 016 — Convenção de Logging Estruturado para Métricas e Observabilidade](adrs/16.md).
+
+---
+
+## 16. Custos Consolidados
+
+Cenário de referência: **10.000 vídeos de 1GB por mês**.
+
+### Estimativa por componente (arquitetura proposta)
 
 | Componente | Uso | Custo Mensal |
 |------------|-----|--------------|
@@ -825,19 +1010,49 @@ URLs pré-assinadas geradas em batches de 20 sob demanda:
 | **Cassandra (3 nodes)** | m5.xlarge | $400.00 |
 | **Total** | - | **~$640/mês** |
 
-### Comparativo com Arquitetura Tradicional
+### Comparativo: Tradicional vs Proposta
 
-| Componente | Tradicional | Proposta | Economia |
-|------------|-------------|----------|----------|
-| Upload (Proxy) | $320 | $0 | 100% |
-| Eventos (Lambda) | $125 | $1.22 | 99% |
-| Processamento (Lambda) | $85 | $3.80 | 95% |
-| Banco (RDS) | $1,500 | $400 | 73% |
-| **Total** | **$2,030** | **$640** | **68%** |
+| Componente | Arquitetura Tradicional | Arquitetura Proposta | Economia |
+|------------|-------------------------|---------------------|----------|
+| **Upload (Proxy vs Presigned)** | $320 | $0 | 100% |
+| **Eventos (Lambda vs EventBridge)** | $125 | $1.22 | 99% |
+| **Processamento (Lambda vs KEDA)** | $85 | $3.80 | 95% |
+| **Banco (RDS vs Cassandra)** | $1,500 | $400 | 73% |
+| **Total Mensal** | **$2,030** | **$640** | **68%** |
+| **Total Anual** | **$24,360** | **$7,680** | **$16,680** |
+
+### Resumo consolidado (10.000 vídeos/mês)
+
+| Métrica | Tradicional | Proposta |
+|---------|-------------|----------|
+| **Total mensal** | $2,030 | $640 |
+| **Total anual** | $24,360 | $7,680 |
+| **Economia** | - | **68%** (~$16.680/ano) |
+
+### Distribuição da economia anual
+
+```mermaid
+pie title Economia Anual por Componente ($16,680 total)
+    "Upload Presigned" : 3840
+    "EventBridge" : 1484
+    "Processamento KEDA" : 974
+    "Cassandra" : 13200
+```
+
+### Escalabilidade de custos
+
+| Volume | Tradicional | Proposta | Economia |
+|--------|-------------|----------|----------|
+| **1.000 vídeos/mês** | $1,595 | $401 | 75% |
+| **10.000 vídeos/mês** | $2,030 | $640 | 68% |
+| **100.000 vídeos/mês** | $3,905 | $411 | 89% |
+| **1.000.000 vídeos/mês** | $19,005 | $510 | 97% |
+
+A economia aumenta com a escala: a arquitetura proposta tem custo quase linear.
 
 ---
 
-## Referências
+## 17. Referências
 
 ### AWS Documentation
 
@@ -873,5 +1088,4 @@ URLs pré-assinadas geradas em batches de 20 sob demanda:
 ### Database
 
 - [Apache Cassandra Documentation](https://cassandra.apache.org/doc/latest/)
-- [ScyllaDB Documentation](https://docs.scylladb.com/)
 - [Cassandra Consistency Levels](https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html#tunable-consistency)

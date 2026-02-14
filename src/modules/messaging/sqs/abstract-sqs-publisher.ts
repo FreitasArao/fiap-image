@@ -63,7 +63,15 @@ export abstract class AbstractSQSPublisher<
         spanId: options.spanId,
       })
 
-      await this.sqsClient.send(
+      this.logger.log('Publishing message to SQS', {
+        event: 'sqs.message.publishing',
+        resource: 'AbstractSQSPublisher',
+        message: 'Publishing message to SQS',
+        'sqs.queueUrl': this.maskQueueUrl(),
+        'sqs.eventType': options.eventType,
+      })
+
+      const response = await this.sqsClient.send(
         new SendMessageCommand({
           QueueUrl: this.queueUrl,
           MessageBody: JSON.stringify(envelope),
@@ -71,19 +79,31 @@ export abstract class AbstractSQSPublisher<
       )
 
       this.logger.log('Message published', {
-        messageId: envelope.metadata.messageId,
-        correlationId: envelope.metadata.correlationId,
-        traceId: envelope.metadata.traceId,
-        eventType: options.eventType,
-        queue: this.maskQueueUrl(),
+        event: 'sqs.message.published',
+        resource: 'AbstractSQSPublisher',
+        message: 'Message published to SQS',
+        status: 'success',
+        'sqs.queueUrl': this.maskQueueUrl(),
+        'sqs.messageId': response.MessageId ?? envelope.metadata.messageId,
+        'sqs.eventType': options.eventType,
       })
 
       return Result.ok(undefined)
     } catch (error) {
       this.logger.error('Failed to publish message', {
-        error,
-        correlationId: options.correlationId,
-        queue: this.maskQueueUrl(),
+        event: 'sqs.message.publish_failed',
+        resource: 'AbstractSQSPublisher',
+        message: 'Failed to publish message to SQS',
+        status: 'failure',
+        error:
+          error instanceof Error
+            ? {
+                message: error.message,
+                kind: error.constructor.name,
+                stack: error.stack,
+              }
+            : { message: String(error), kind: 'Error' },
+        'sqs.queueUrl': this.maskQueueUrl(),
       })
       return Result.fail(
         error instanceof Error ? error : new Error(String(error)),
@@ -133,7 +153,15 @@ export abstract class AbstractSQSPublisher<
 
         if (response.Failed && response.Failed.length > 0) {
           this.logger.error('Batch publish partial failure', {
-            correlationId: options.correlationId,
+            event: 'sqs.message.publish_failed',
+            resource: 'AbstractSQSPublisher',
+            message: 'Batch publish partial failure',
+            status: 'failure',
+            error: {
+              message: `Failed to publish ${response.Failed.length} messages`,
+              kind: 'BatchPublishError',
+            },
+            'sqs.queueUrl': this.maskQueueUrl(),
             failedCount: response.Failed.length,
             failures: response.Failed,
           })
@@ -144,18 +172,31 @@ export abstract class AbstractSQSPublisher<
       }
 
       this.logger.log('Batch published', {
-        correlationId: options.correlationId,
-        eventType: options.eventType,
+        event: 'sqs.message.published',
+        resource: 'AbstractSQSPublisher',
+        message: 'Batch published to SQS',
+        status: 'success',
+        'sqs.queueUrl': this.maskQueueUrl(),
+        'sqs.eventType': options.eventType,
         count: payloads.length,
-        queue: this.maskQueueUrl(),
       })
 
       return Result.ok(undefined)
     } catch (error) {
       this.logger.error('Failed to publish batch', {
-        error,
-        correlationId: options.correlationId,
-        queue: this.maskQueueUrl(),
+        event: 'sqs.message.publish_failed',
+        resource: 'AbstractSQSPublisher',
+        message: 'Failed to publish batch to SQS',
+        status: 'failure',
+        error:
+          error instanceof Error
+            ? {
+                message: error.message,
+                kind: error.constructor.name,
+                stack: error.stack,
+              }
+            : { message: String(error), kind: 'Error' },
+        'sqs.queueUrl': this.maskQueueUrl(),
       })
       return Result.fail(
         error instanceof Error ? error : new Error(String(error)),

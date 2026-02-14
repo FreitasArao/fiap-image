@@ -1,11 +1,9 @@
 import { AbstractLoggerService } from '@core/libs/logging/abstract-logger'
+import { msToNs } from '@core/libs/logging/log-event'
 
 export interface LoggerContainer {
   logger: AbstractLoggerService
 }
-
-/** Convert milliseconds to nanoseconds (Datadog standard) */
-const msToNs = (ms: number): number => Math.round(ms * 1_000_000)
 
 export function Log(): MethodDecorator {
   return (
@@ -24,9 +22,10 @@ export function Log(): MethodDecorator {
       const startTime = performance.now()
 
       if (logger) {
-        logger.log(`method.execution.start`, {
+        logger.log('Method execution started', {
+          event: 'method.execution.start',
+          resource: 'LogDecorator',
           originMethod: methodName,
-          component: 'decorator',
         })
       }
 
@@ -34,23 +33,29 @@ export function Log(): MethodDecorator {
         const result = await originalMethod.apply(this, args)
 
         if (logger) {
-          logger.log(`method.execution.end`, {
+          logger.log('Method execution ended', {
+            event: 'method.execution.end',
+            resource: 'LogDecorator',
             originMethod: methodName,
             duration: msToNs(performance.now() - startTime),
             status: 'success',
-            component: 'decorator',
           })
         }
 
         return result
       } catch (error) {
         if (logger) {
-          logger.error(`method.execution.end`, {
-            error: error instanceof Error ? error.message : String(error),
+          logger.error('Method execution failed', {
+            event: 'method.execution.end',
+            resource: 'LogDecorator',
             originMethod: methodName,
             duration: msToNs(performance.now() - startTime),
-            status: 'error',
-            component: 'decorator',
+            status: 'failure',
+            error: {
+              message: error instanceof Error ? error.message : String(error),
+              kind: error instanceof Error ? error.constructor.name : 'Error',
+              stack: error instanceof Error ? error.stack : undefined,
+            },
           })
         }
         throw error
